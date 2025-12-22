@@ -65,6 +65,7 @@ public class HotelBookingServer {
         server.createContext("/paying_guest", new PgsHandler(dbConfig));
         server.createContext("/booking", new BookingHandler(dbConfig));
         server.createContext("/profile", new ProfileHandler(dbConfig));
+        server.createContext("/app/change-password", new ProfileHandler(dbConfig));
         server.createContext("/booking-history", new BookingHistoryHandler(dbConfig));
         server.createContext("/cancel-booking", new BookingHistoryHandler(dbConfig));
         server.createContext("/update-booking-dates", new BookingHistoryHandler(dbConfig));
