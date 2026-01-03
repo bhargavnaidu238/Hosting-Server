@@ -77,7 +77,7 @@ public final class DbConfig {
         config.setPassword(password);
 
         // Explicit driver (MySQL)
-        config.setDriverClassName("com.mysql.cj.jdbc.Driver");
+        //config.setDriverClassName("com.mysql.cj.jdbc.Driver");
 
         // Pool tuning (safe defaults)
         config.setMaximumPoolSize(10);
