@@ -33,31 +33,28 @@ import com.sun.net.httpserver.HttpServer;
 public class HotelBookingServer {
     public static void main(String[] args) throws Exception {
     	 int port = Integer.parseInt(
-    	            System.getenv().getOrDefault("PORT", "8080")
+    	            System.getenv().getOrDefault("PORT", "10000")
     	    );
 
         HttpServer server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
-        System.out.println("🚀 Server started on port: " + port);
+        System.out.println("Server started on port: " + port);
         
         // ===== Load DB config once at startup =====
         DbConfig dbConfig = new DbConfig();
         
         try (
-                Connection customerConn =
-                        dbConfig.getCustomerDataSource().getConnection();
-                Connection partnerConn =
-                        dbConfig.getPartnerDataSource().getConnection()
+                Connection customerConn = dbConfig.getCustomerDataSource().getConnection();
+                Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()
             ) {
-                System.out.println("✅ Database connections validated successfully");
+                System.out.println("Database connections validated successfully");
             }
-
-        // ===== Validate pooled connections =====
-        try (Connection customerConn =
-                     dbConfig.getCustomerDataSource().getConnection();
-             Connection partnerConn =
-                     dbConfig.getPartnerDataSource().getConnection()) {
-            
-        }
+        
+        server.createContext("/", exchange -> {
+            String response = "Hotel Backend is running";
+            exchange.sendResponseHeaders(200, response.length());
+            exchange.getResponseBody().write(response.getBytes());
+            exchange.close();
+        });
         
         server.createContext("/health", exchange -> {
             String response = "OK";
