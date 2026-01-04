@@ -138,6 +138,7 @@ public class HotelBookingServer {
         }));
         
         server.start();
+        Thread.currentThread().join();
 
         System.out.println("✅ Server started successfully on port " + port);
         System.out.println("Available endpoints:");
