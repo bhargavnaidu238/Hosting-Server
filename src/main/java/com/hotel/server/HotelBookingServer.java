@@ -39,6 +39,7 @@ public class HotelBookingServer {
         HttpServer server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
         System.out.println("Server started on port: " + port);
         
+        /*
         // ===== Load DB config once at startup =====
         DbConfig dbConfig = new DbConfig();
         
@@ -48,7 +49,7 @@ public class HotelBookingServer {
             ) {
                 System.out.println("Database connections validated successfully");
             }
-        
+        */
         server.createContext("/", exchange -> {
             String response = "Hotel Backend is running";
             exchange.sendResponseHeaders(200, response.length());
