@@ -5,7 +5,6 @@ import com.zaxxer.hikari.HikariDataSource;
 
 import javax.sql.DataSource;
 
-
 public final class DbConfig {
 
     // ===== DB URLs =====
@@ -32,31 +31,32 @@ public final class DbConfig {
     // ===== Constructor (ENV BASED) =====
     public DbConfig() {
 
+        // PostgreSQL JDBC URLs (NO username/password inside URL)
         this.customerDbUrl = getEnv("CUSTOMER_DB_URL");
         this.partnerDbUrl  = getEnv("PARTNER_DB_URL");
-        this.username      = getEnv("DB_USERNAME");
-        this.password      = getEnv("DB_PASSWORD");
 
-        this.imageBaseUrl      = getEnv("IMAGE_BASE_URL");
-        this.hotelImagesPath   = getEnv("HOTEL_IMAGES_PATH");
+        this.username = getEnv("DB_USERNAME");
+        this.password = getEnv("DB_PASSWORD");
+
+        this.imageBaseUrl    = getEnv("IMAGE_BASE_URL");
+        this.hotelImagesPath = getEnv("HOTEL_IMAGES_PATH");
 
         this.apiKey        = getEnv("PAYMENT_API_KEY");
         this.apiKeySecret  = getEnv("PAYMENT_API_SECRET");
         this.webHookSecret = getOptionalEnv("PAYMENT_WEBHOOK_SECRET");
-        //this.webHookSecret = getEnv("PAYMENT_WEBHOOK_SECRET");
 
         // Initialize pools
         this.customerDataSource = createDataSource(customerDbUrl);
         this.partnerDataSource  = createDataSource(partnerDbUrl);
     }
-    
+
+    // ===== Optional ENV =====
     private String getOptionalEnv(String key) {
         String value = System.getenv(key);
         return (value == null || value.isBlank()) ? null : value;
     }
 
-
-    // ===== ENV Helper =====
+    // ===== Required ENV =====
     private String getEnv(String key) {
         String value = System.getenv(key);
         if (value == null || value.isBlank()) {
@@ -67,30 +67,29 @@ public final class DbConfig {
         return value;
     }
 
-
-    // ===== HikariCP Setup =====
+    // ===== HikariCP Setup (PostgreSQL) =====
     private HikariDataSource createDataSource(String jdbcUrl) {
 
         HikariConfig config = new HikariConfig();
+
         config.setJdbcUrl(jdbcUrl);
         config.setUsername(username);
         config.setPassword(password);
 
-        // Explicit driver (MySQL)
-        //config.setDriverClassName("com.mysql.cj.jdbc.Driver");
+        // REQUIRED PostgreSQL Driver
+        config.setDriverClassName("org.postgresql.Driver");
 
-        // Pool tuning (safe defaults)
-        config.setMaximumPoolSize(10);
-        config.setMinimumIdle(2);
+        // ===== Pool tuning (Render safe) =====
+        config.setMaximumPoolSize(5);
+        config.setMinimumIdle(1);
         config.setConnectionTimeout(30_000);
         config.setIdleTimeout(600_000);
         config.setMaxLifetime(1_800_000);
 
-        // MySQL optimizations
-        config.addDataSourceProperty("cachePrepStmts", "true");
-        config.addDataSourceProperty("prepStmtCacheSize", "250");
-        config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
-        config.addDataSourceProperty("useServerPrepStmts", "true");
+        // ===== PostgreSQL optimizations =====
+        config.addDataSourceProperty("tcpKeepAlive", "true");
+        config.addDataSourceProperty("ssl", "true");
+        config.addDataSourceProperty("sslmode", "require");
 
         return new HikariDataSource(config);
     }
