@@ -73,7 +73,7 @@ public class LoginHandler implements HttpHandler {
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
 
-            String sql = "SELECT * FROM User_Info WHERE User_Email = ?";
+            String sql = "SELECT * FROM user_info WHERE user_email = ?";
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
 
                 ps.setString(1, email);
@@ -86,7 +86,7 @@ public class LoginHandler implements HttpHandler {
                         return;
                     }
 
-                    if ("Inactive".equalsIgnoreCase(rs.getString("Status"))) {
+                    if ("Inactive".equalsIgnoreCase(rs.getString("status"))) {
                         sendJsonResponse(exchange, 403,
                                 new JSONObject().put("error", "inactive").toString());
                         return;
@@ -99,12 +99,12 @@ public class LoginHandler implements HttpHandler {
                     }
 
                     JSONObject user = new JSONObject();
-                    user.put("userId", rs.getString("User_ID"));
-                    user.put("firstName", rs.getString("FirstName"));
-                    user.put("lastName", rs.getString("LastName"));
-                    user.put("email", rs.getString("User_Email"));
-                    user.put("mobile", rs.getString("Mobile_Number"));
-                    user.put("address", rs.getString("Address"));
+                    user.put("userId", rs.getString("user_id"));
+                    user.put("firstName", rs.getString("firstname"));
+                    user.put("lastName", rs.getString("lastname"));
+                    user.put("email", rs.getString("user_email"));
+                    user.put("mobile", rs.getString("mobile_number"));
+                    user.put("address", rs.getString("address"));
 
                     sendJsonResponse(exchange, 200, user.toString());
                 }
@@ -124,9 +124,9 @@ public class LoginHandler implements HttpHandler {
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
 
             String sql = """
-                SELECT Mobile_Number FROM User_Info
-                WHERE User_Email = ?
-                  AND Status = 'Active'
+                SELECT Mobile_Number FROM user_info
+                WHERE user_email = ?
+                  AND status = 'Active'
             """;
 
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -134,7 +134,7 @@ public class LoginHandler implements HttpHandler {
 
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) {
-                        String dbMobile = normalizeMobile(rs.getString("Mobile_Number"));
+                        String dbMobile = normalizeMobile(rs.getString("mobile_number"));
                         matched = inputMobile.equals(dbMobile);
                     }
                 }
@@ -159,10 +159,10 @@ public class LoginHandler implements HttpHandler {
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
 
             String sql = """
-                UPDATE User_Info
-                SET Password = ?
-                WHERE User_Email = ?
-                  AND Status = 'Active'
+                UPDATE user_info
+                SET password = ?
+                WHERE user_email = ?
+                  AND status = 'Active'
             """;
 
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
