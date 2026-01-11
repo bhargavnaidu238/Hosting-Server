@@ -38,8 +38,8 @@ public class RegisterHandler implements HttpHandler {
             JSONObject json = new JSONObject(body);
 
             String email = json.getString("email").toLowerCase();
-            String firstName = json.optString("firstname", null);
-            String lastName = json.optString("lastname", null);
+            String firstName = json.optString("firstName", null);
+            String lastName = json.optString("lastName", null);
             String gender = json.optString("gender", null);
             String mobile = json.optString("mobile", null);
             String address = json.optString("address", null);
