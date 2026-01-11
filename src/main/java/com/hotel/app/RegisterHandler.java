@@ -10,12 +10,12 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.UUID;
-import java.math.BigDecimal;
 
 public class RegisterHandler implements HttpHandler {
 
     private final DbConfig dbConfig;
 
+    // ✅ Inject DbConfig via constructor
     public RegisterHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
     }
@@ -47,23 +47,21 @@ public class RegisterHandler implements HttpHandler {
             String gender = json.getString("gender");
             String mobile = json.getString("mobile");
             String address = json.getString("address");
-            String rawPassword = json.getString("password");
+            String rawPassword = json.getString("password"); // 👈 raw from Flutter
+            String consent = json.getString("consent");
 
-            // ✅ CONSENT FIX (String → Boolean)
-            boolean consent = parseConsent(json.get("consent"));
-
-            // ✅ Hash password
+            // ✅ Hash password in backend
             String hashedPassword = PasswordUtil.hashPassword(rawPassword);
 
-            try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
+            // ===== Get pooled DB connection =====
+            try (Connection conn =
+                         dbConfig.getCustomerDataSource().getConnection()) {
 
-                conn.setAutoCommit(false);
-
-                // ===== Check email =====
+                // ===== Check if email exists =====
                 String checkSql = "SELECT 1 FROM user_info WHERE user_email = ?";
-                try (PreparedStatement ps = conn.prepareStatement(checkSql)) {
-                    ps.setString(1, email);
-                    try (ResultSet rs = ps.executeQuery()) {
+                try (PreparedStatement checkStmt = conn.prepareStatement(checkSql)) {
+                    checkStmt.setString(1, email);
+                    try (ResultSet rs = checkStmt.executeQuery()) {
                         if (rs.next()) {
                             sendResponse(exchange, 400, "Email already exists");
                             return;
@@ -71,71 +69,61 @@ public class RegisterHandler implements HttpHandler {
                     }
                 }
 
-                // ===== Insert user =====
-                String insertUserSql = """
-                        INSERT INTO user_info
-                        (user_email, password, first_name, last_name,
-                         gender, mobile_number, address, consent)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        RETURNING user_id
-                        """;
+                // ===== Generate new user_id =====
+                String newId = "CR9087601";
+                String idSql = "SELECT user_id FROM user_info ORDER BY user_id DESC LIMIT 1";
+                try (Statement stmt = conn.createStatement();
+                     ResultSet idRs = stmt.executeQuery(idSql)) {
 
-                int userId;
-
-                try (PreparedStatement ps = conn.prepareStatement(insertUserSql)) {
-                    ps.setString(1, email);
-                    ps.setString(2, hashedPassword);
-                    ps.setString(3, firstName.toUpperCase());
-                    ps.setString(4, lastName.toUpperCase());
-                    ps.setString(5, gender);
-                    ps.setString(6, mobile);
-                    ps.setString(7, address);
-                    ps.setBoolean(8, consent);
-
-                    try (ResultSet rs = ps.executeQuery()) {
-                        if (!rs.next()) {
-                            throw new SQLException("User creation failed");
-                        }
-                        userId = rs.getInt("user_id");
+                    if (idRs.next()) {
+                        String lastId = idRs.getString("user_id");
+                        int numericPart = Integer.parseInt(lastId.substring(2)) + 1;
+                        newId = "CR" + numericPart;
                     }
                 }
 
-                // ===== Create wallet =====
+                // ===== Insert new user =====
+                String insertSql = """
+                        INSERT INTO user_info
+                        (user_id, user_email, password, firstname, lastname,
+                         gender, mobile_number, address, consent)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """;
+
+                try (PreparedStatement insertStmt = conn.prepareStatement(insertSql)) {
+                    insertStmt.setString(1, newId);
+                    insertStmt.setString(2, email);
+                    insertStmt.setString(3, hashedPassword); // ✅ bcrypt hash
+                    insertStmt.setString(4, firstName.toUpperCase());
+                    insertStmt.setString(5, lastName.toUpperCase());
+                    insertStmt.setString(6, gender);
+                    insertStmt.setString(7, mobile);
+                    insertStmt.setString(8, address);
+                    insertStmt.setString(9, consent);
+                    insertStmt.executeUpdate();
+                }
+                
                 String walletSql = """
                         INSERT INTO wallets
                         (wallet_id, user_id, balance, status)
                         VALUES (?, ?, ?, ?)
                         """;
 
-                try (PreparedStatement ps = conn.prepareStatement(walletSql)) {
-                    ps.setString(1, UUID.randomUUID().toString());
-                    ps.setInt(2, userId);
-                    ps.setBigDecimal(3, new BigDecimal("200.00"));
-                    ps.setString(4, "active");
-                    ps.executeUpdate();
+                try (PreparedStatement walletStmt = conn.prepareStatement(walletSql)) {
+                    walletStmt.setString(1, UUID.randomUUID().toString());
+                    walletStmt.setString(2, newId);
+                    walletStmt.setBigDecimal(3, new java.math.BigDecimal("200.00"));
+                    walletStmt.setString(4, "active");
+                    walletStmt.executeUpdate();
                 }
-
-                conn.commit();
             }
-
+            
             sendResponse(exchange, 200, "Registration Successful");
 
         } catch (Exception e) {
             e.printStackTrace();
             sendResponse(exchange, 500, "Registration Failed");
         }
-    }
-
-    // ✅ Robust consent parser
-    private boolean parseConsent(Object value) {
-        if (value instanceof Boolean) {
-            return (Boolean) value;
-        }
-        if (value instanceof String) {
-            String v = ((String) value).trim().toLowerCase();
-            return v.equals("yes") || v.equals("true") || v.equals("1");
-        }
-        return false;
     }
 
     private void sendResponse(HttpExchange exchange, int code, String msg) throws IOException {
