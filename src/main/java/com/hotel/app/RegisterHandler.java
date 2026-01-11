@@ -42,8 +42,8 @@ public class RegisterHandler implements HttpHandler {
             JSONObject json = new JSONObject(sb.toString());
 
             String email = json.getString("email");
-            String firstName = json.getString("firstName");
-            String lastName = json.getString("lastName");
+            String firstName = json.getString("firstname");
+            String lastName = json.getString("lastname");
             String gender = json.getString("gender");
             String mobile = json.getString("mobile");
             String address = json.getString("address");
@@ -85,7 +85,7 @@ public class RegisterHandler implements HttpHandler {
                 // ===== Insert new user =====
                 String insertSql = """
                         INSERT INTO user_info
-                        (user_id, user_email, password, firstname, lastname,
+                        (user_id, user_email, password, first_name, last_name,
                          gender, mobile_number, address, consent)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """;

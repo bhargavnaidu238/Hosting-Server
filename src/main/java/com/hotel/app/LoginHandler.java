@@ -100,8 +100,8 @@ public class LoginHandler implements HttpHandler {
 
                     JSONObject user = new JSONObject();
                     user.put("userId", rs.getString("user_id"));
-                    user.put("firstName", rs.getString("firstname"));
-                    user.put("lastName", rs.getString("lastname"));
+                    user.put("firstName", rs.getString("first_name"));
+                    user.put("lastName", rs.getString("last_name"));
                     user.put("email", rs.getString("user_email"));
                     user.put("mobile", rs.getString("mobile_number"));
                     user.put("address", rs.getString("address"));
@@ -124,7 +124,7 @@ public class LoginHandler implements HttpHandler {
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
 
             String sql = """
-                SELECT Mobile_Number FROM user_info
+                SELECT mobile_number FROM user_info
                 WHERE user_email = ?
                   AND status = 'Active'
             """;
