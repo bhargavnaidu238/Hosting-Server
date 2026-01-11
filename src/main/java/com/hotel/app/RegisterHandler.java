@@ -16,7 +16,6 @@ public class RegisterHandler implements HttpHandler {
 
     private final DbConfig dbConfig;
 
-    // ✅ Inject DbConfig via constructor
     public RegisterHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
     }
@@ -49,23 +48,22 @@ public class RegisterHandler implements HttpHandler {
             String mobile = json.getString("mobile");
             String address = json.getString("address");
             String rawPassword = json.getString("password");
-            boolean consent = json.getBoolean("consent");
+
+            // ✅ CONSENT FIX (String → Boolean)
+            boolean consent = parseConsent(json.get("consent"));
 
             // ✅ Hash password
             String hashedPassword = PasswordUtil.hashPassword(rawPassword);
 
             try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
 
-                conn.setAutoCommit(false); // ✅ transaction safety
+                conn.setAutoCommit(false);
 
-                // ===== Check if email exists =====
-                String checkSql = """
-                        SELECT 1 FROM user_info WHERE user_email = ?
-                        """;
-
-                try (PreparedStatement checkStmt = conn.prepareStatement(checkSql)) {
-                    checkStmt.setString(1, email);
-                    try (ResultSet rs = checkStmt.executeQuery()) {
+                // ===== Check email =====
+                String checkSql = "SELECT 1 FROM user_info WHERE user_email = ?";
+                try (PreparedStatement ps = conn.prepareStatement(checkSql)) {
+                    ps.setString(1, email);
+                    try (ResultSet rs = ps.executeQuery()) {
                         if (rs.next()) {
                             sendResponse(exchange, 400, "Email already exists");
                             return;
@@ -73,7 +71,7 @@ public class RegisterHandler implements HttpHandler {
                     }
                 }
 
-                // ===== Insert new user (PostgreSQL) =====
+                // ===== Insert user =====
                 String insertUserSql = """
                         INSERT INTO user_info
                         (user_email, password, first_name, last_name,
@@ -82,45 +80,42 @@ public class RegisterHandler implements HttpHandler {
                         RETURNING user_id
                         """;
 
-                int generatedUserId;
+                int userId;
 
-                try (PreparedStatement insertStmt =
-                             conn.prepareStatement(insertUserSql)) {
+                try (PreparedStatement ps = conn.prepareStatement(insertUserSql)) {
+                    ps.setString(1, email);
+                    ps.setString(2, hashedPassword);
+                    ps.setString(3, firstName.toUpperCase());
+                    ps.setString(4, lastName.toUpperCase());
+                    ps.setString(5, gender);
+                    ps.setString(6, mobile);
+                    ps.setString(7, address);
+                    ps.setBoolean(8, consent);
 
-                    insertStmt.setString(1, email);
-                    insertStmt.setString(2, hashedPassword);
-                    insertStmt.setString(3, firstName.toUpperCase());
-                    insertStmt.setString(4, lastName.toUpperCase());
-                    insertStmt.setString(5, gender);
-                    insertStmt.setString(6, mobile);
-                    insertStmt.setString(7, address);
-                    insertStmt.setBoolean(8, consent);
-
-                    try (ResultSet rs = insertStmt.executeQuery()) {
-                        if (rs.next()) {
-                            generatedUserId = rs.getInt("user_id");
-                        } else {
-                            throw new SQLException("Failed to generate user_id");
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (!rs.next()) {
+                            throw new SQLException("User creation failed");
                         }
+                        userId = rs.getInt("user_id");
                     }
                 }
 
-                // ===== Create wallet for user =====
+                // ===== Create wallet =====
                 String walletSql = """
                         INSERT INTO wallets
                         (wallet_id, user_id, balance, status)
                         VALUES (?, ?, ?, ?)
                         """;
 
-                try (PreparedStatement walletStmt = conn.prepareStatement(walletSql)) {
-                    walletStmt.setString(1, UUID.randomUUID().toString());
-                    walletStmt.setInt(2, generatedUserId);
-                    walletStmt.setBigDecimal(3, new BigDecimal("200.00"));
-                    walletStmt.setString(4, "active");
-                    walletStmt.executeUpdate();
+                try (PreparedStatement ps = conn.prepareStatement(walletSql)) {
+                    ps.setString(1, UUID.randomUUID().toString());
+                    ps.setInt(2, userId);
+                    ps.setBigDecimal(3, new BigDecimal("200.00"));
+                    ps.setString(4, "active");
+                    ps.executeUpdate();
                 }
 
-                conn.commit(); // ✅ commit transaction
+                conn.commit();
             }
 
             sendResponse(exchange, 200, "Registration Successful");
@@ -129,6 +124,18 @@ public class RegisterHandler implements HttpHandler {
             e.printStackTrace();
             sendResponse(exchange, 500, "Registration Failed");
         }
+    }
+
+    // ✅ Robust consent parser
+    private boolean parseConsent(Object value) {
+        if (value instanceof Boolean) {
+            return (Boolean) value;
+        }
+        if (value instanceof String) {
+            String v = ((String) value).trim().toLowerCase();
+            return v.equals("yes") || v.equals("true") || v.equals("1");
+        }
+        return false;
     }
 
     private void sendResponse(HttpExchange exchange, int code, String msg) throws IOException {
