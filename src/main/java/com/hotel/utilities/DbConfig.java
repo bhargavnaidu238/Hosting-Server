@@ -40,7 +40,7 @@ public final class DbConfig {
         this.webHookSecret = getOptionalEnv("PAYMENT_WEBHOOK_SECRET");
 
         // ---- Startup visibility (VERY IMPORTANT) ----
-        System.out.println("✅ DB CONFIG LOADED");
+        System.out.println("DB CONFIG LOADED");
         System.out.println("   CUSTOMER_DB_URL = " + customerDbUrl);
         if (partnerDbUrl != null) {
             System.out.println("   PARTNER_DB_URL  = " + partnerDbUrl);
@@ -52,7 +52,7 @@ public final class DbConfig {
         if (customerDataSource == null) {
             synchronized (this) {
                 if (customerDataSource == null) {
-                    System.out.println("🔌 Initializing CUSTOMER DB pool");
+                    System.out.println("Initializing CUSTOMER DB pool");
                     customerDataSource = createDataSource(customerDbUrl);
                 }
             }
