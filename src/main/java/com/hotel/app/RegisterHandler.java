@@ -15,7 +15,6 @@ public class RegisterHandler implements HttpHandler {
 
     private final DbConfig dbConfig;
 
-    // ✅ Inject DbConfig via constructor
     public RegisterHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
     }
@@ -23,101 +22,104 @@ public class RegisterHandler implements HttpHandler {
     @Override
     public void handle(HttpExchange exchange) throws IOException {
 
-        if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
+        if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(405, -1);
             return;
         }
 
         try {
-            // ===== Read JSON body =====
-            StringBuilder sb = new StringBuilder();
+            // ===== Read JSON =====
+            String body;
             try (BufferedReader br = new BufferedReader(
                     new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    sb.append(line);
-                }
+                body = br.lines().reduce("", String::concat);
             }
 
-            JSONObject json = new JSONObject(sb.toString());
+            JSONObject json = new JSONObject(body);
 
-            String email = json.getString("email");
-            String firstName = json.getString("first_name");
-            String lastName = json.getString("last_name");
-            String gender = json.getString("gender");
-            String mobile = json.getString("mobile");
-            String address = json.getString("address");
-            String rawPassword = json.getString("password"); // 👈 raw from Flutter
-            String consent = json.getString("consent");
+            String email = json.getString("email").toLowerCase();
+            String firstName = json.optString("firstname", null);
+            String lastName = json.optString("lastname", null);
+            String gender = json.optString("gender", null);
+            String mobile = json.optString("mobile", null);
+            String address = json.optString("address", null);
+            String rawPassword = json.getString("password");
 
-            // ✅ Hash password in backend
+            // Consent must be Yes / No
+            String consent = json.optString("consent", "No");
+            if (!consent.equalsIgnoreCase("Yes") && !consent.equalsIgnoreCase("No")) {
+                sendResponse(exchange, 400, "Consent must be Yes or No");
+                return;
+            }
+
             String hashedPassword = PasswordUtil.hashPassword(rawPassword);
 
-            // ===== Get pooled DB connection =====
-            try (Connection conn =
-                         dbConfig.getCustomerDataSource().getConnection()) {
+            try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
+                conn.setAutoCommit(false);
 
-                // ===== Check if email exists =====
-                String checkSql = "SELECT 1 FROM user_info WHERE user_email = ?";
-                try (PreparedStatement checkStmt = conn.prepareStatement(checkSql)) {
-                    checkStmt.setString(1, email);
-                    try (ResultSet rs = checkStmt.executeQuery()) {
-                        if (rs.next()) {
-                            sendResponse(exchange, 400, "Email already exists");
-                            return;
-                        }
+                // ===== Check email =====
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "SELECT 1 FROM user_info WHERE user_email = ?")) {
+                    ps.setString(1, email);
+                    if (ps.executeQuery().next()) {
+                        sendResponse(exchange, 400, "Email already exists");
+                        return;
                     }
                 }
 
-                // ===== Generate new user_id =====
-                String newId = "CR9087601";
+                // ===== Generate user_id (CR series) =====
+                String newUserId = "CR9087601";
+
                 String idSql = "SELECT user_id FROM user_info ORDER BY user_id DESC LIMIT 1";
                 try (Statement stmt = conn.createStatement();
-                     ResultSet idRs = stmt.executeQuery(idSql)) {
+                     ResultSet rs = stmt.executeQuery(idSql)) {
 
-                    if (idRs.next()) {
-                        String lastId = idRs.getString("user_id");
-                        int numericPart = Integer.parseInt(lastId.substring(2)) + 1;
-                        newId = "CR" + numericPart;
+                    if (rs.next()) {
+                        String lastId = rs.getString("user_id"); // CR9087601
+                        int num = Integer.parseInt(lastId.substring(2)) + 1;
+                        newUserId = "CR" + num;
                     }
                 }
 
-                // ===== Insert new user =====
+                // ===== Insert user =====
                 String insertSql = """
-                        INSERT INTO user_info
-                        (user_id, user_email, password, first_name, last_name,
-                         gender, mobile_number, address, consent)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """;
+                    INSERT INTO user_info
+                    (user_id, user_email, password, first_name, last_name,
+                     gender, mobile_number, address, consent)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::yes_no_enum)
+                """;
 
-                try (PreparedStatement insertStmt = conn.prepareStatement(insertSql)) {
-                    insertStmt.setString(1, newId);
-                    insertStmt.setString(2, email);
-                    insertStmt.setString(3, hashedPassword); // ✅ bcrypt hash
-                    insertStmt.setString(4, firstName.toUpperCase());
-                    insertStmt.setString(5, lastName.toUpperCase());
-                    insertStmt.setString(6, gender);
-                    insertStmt.setString(7, mobile);
-                    insertStmt.setString(8, address);
-                    insertStmt.setString(9, consent);
-                    insertStmt.executeUpdate();
+                try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
+                    ps.setString(1, newUserId);
+                    ps.setString(2, email);
+                    ps.setString(3, hashedPassword);
+                    ps.setString(4, firstName);
+                    ps.setString(5, lastName);
+                    ps.setString(6, gender);
+                    ps.setString(7, mobile);
+                    ps.setString(8, address);
+                    ps.setString(9, consent);
+                    ps.executeUpdate();
                 }
-                
+
+                // ===== Create wallet =====
                 String walletSql = """
-                        INSERT INTO wallets
-                        (wallet_id, user_id, balance, status)
-                        VALUES (?, ?, ?, ?)
-                        """;
+                    INSERT INTO wallets
+                    (wallet_id, user_id, balance, status)
+                    VALUES (?, ?, ?, ?)
+                """;
 
-                try (PreparedStatement walletStmt = conn.prepareStatement(walletSql)) {
-                    walletStmt.setString(1, UUID.randomUUID().toString());
-                    walletStmt.setString(2, newId);
-                    walletStmt.setBigDecimal(3, new java.math.BigDecimal("200.00"));
-                    walletStmt.setString(4, "active");
-                    walletStmt.executeUpdate();
+                try (PreparedStatement ps = conn.prepareStatement(walletSql)) {
+                    ps.setString(1, UUID.randomUUID().toString());
+                    ps.setString(2, newUserId);
+                    ps.setBigDecimal(3, new java.math.BigDecimal("200.00"));
+                    ps.setString(4, "Active");
+                    ps.executeUpdate();
                 }
+
+                conn.commit();
             }
-            
+
             sendResponse(exchange, 200, "Registration Successful");
 
         } catch (Exception e) {

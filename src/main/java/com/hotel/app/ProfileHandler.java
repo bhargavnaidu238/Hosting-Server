@@ -72,7 +72,7 @@ public class ProfileHandler implements HttpHandler {
         try (Connection conn = getConnection()) {
 
             String selectSql =
-                    "SELECT Password FROM user_info WHERE LOWER(user_email)=? AND status='Active'";
+                    "SELECT password FROM user_info WHERE LOWER(user_email)=? AND status='Active'";
 
             PreparedStatement ps = conn.prepareStatement(selectSql);
             ps.setString(1, email);
@@ -87,7 +87,7 @@ public class ProfileHandler implements HttpHandler {
                     String newHash = PasswordUtil.hashPassword(newPassword);
 
                     String updateSql =
-                            "UPDATE user_info SET password=? WHERE LOWER(user_email)=?";
+                            "UPDATE User_Info SET password=? WHERE LOWER(user_email)=?";
 
                     PreparedStatement ups = conn.prepareStatement(updateSql);
                     ups.setString(1, newHash);
