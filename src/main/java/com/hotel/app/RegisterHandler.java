@@ -42,8 +42,8 @@ public class RegisterHandler implements HttpHandler {
             JSONObject json = new JSONObject(sb.toString());
 
             String email = json.getString("email");
-            String firstName = json.getString("firstname");
-            String lastName = json.getString("lastname");
+            String firstName = json.getString("first_name");
+            String lastName = json.getString("last_name");
             String gender = json.getString("gender");
             String mobile = json.getString("mobile");
             String address = json.getString("address");
