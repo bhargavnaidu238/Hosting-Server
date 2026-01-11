@@ -73,19 +73,19 @@ public class AppFilterHandler implements HttpHandler {
 
     private JSONArray fetchHotelsWithFilters(JSONObject filters, String sortBy) throws SQLException {
         JSONArray hotelsArray = new JSONArray();
-        StringBuilder baseQuery = new StringBuilder("SELECT * FROM Hotels_info WHERE 1=1");
+        StringBuilder baseQuery = new StringBuilder("SELECT * FROM hotels_info WHERE 1=1");
         List<Object> params = new ArrayList<>();
 
         // City filter (flexible: check City and State)
         if (filters.has("city") && !filters.optString("city").trim().isEmpty()) {
-            baseQuery.append(" AND (LOWER(City) LIKE ? OR LOWER(State) LIKE ?)");
+            baseQuery.append(" AND (LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
             String cityLike = "%" + filters.getString("city").toLowerCase() + "%";
             params.add(cityLike);
             params.add(cityLike);
         }
 
         // Hotel Type filter
-        if (filters.has("hotelType") && !filters.optString("hotelType").trim().isEmpty()) {
+        if (filters.has("hoteltype") && !filters.optString("hoteltype").trim().isEmpty()) {
             baseQuery.append(" AND LOWER(Hotel_Type) = ?");
             params.add(filters.getString("hotelType").toLowerCase());
         }

@@ -72,7 +72,7 @@ public class ProfileHandler implements HttpHandler {
         try (Connection conn = getConnection()) {
 
             String selectSql =
-                    "SELECT Password FROM User_Info WHERE LOWER(User_Email)=? AND Status='Active'";
+                    "SELECT Password FROM user_info WHERE LOWER(user_email)=? AND status='Active'";
 
             PreparedStatement ps = conn.prepareStatement(selectSql);
             ps.setString(1, email);
@@ -80,14 +80,14 @@ public class ProfileHandler implements HttpHandler {
             ResultSet rs = ps.executeQuery();
 
             if (rs.next()) {
-                String storedHash = rs.getString("Password");
+                String storedHash = rs.getString("password");
 
                 if (PasswordUtil.verifyPassword(currentPassword, storedHash)) {
 
                     String newHash = PasswordUtil.hashPassword(newPassword);
 
                     String updateSql =
-                            "UPDATE User_Info SET Password=? WHERE LOWER(User_Email)=?";
+                            "UPDATE user_info SET password=? WHERE LOWER(user_email)=?";
 
                     PreparedStatement ups = conn.prepareStatement(updateSql);
                     ups.setString(1, newHash);
@@ -122,20 +122,20 @@ public class ProfileHandler implements HttpHandler {
         }
 
         try (Connection conn = getConnection()) {
-            String sql = "SELECT * FROM User_Info WHERE LOWER(User_Email) = ?";
+            String sql = "SELECT * FROM user_info WHERE LOWER(user_email) = ?";
             PreparedStatement stmt = conn.prepareStatement(sql);
             stmt.setString(1, email.toLowerCase());
 
             ResultSet rs = stmt.executeQuery();
             if (rs.next()) {
                 Map<String, Object> userData = new HashMap<>();
-                userData.put("userId", rs.getString("User_ID"));
-                userData.put("email", rs.getString("User_Email"));
-                userData.put("firstName", rs.getString("FirstName"));
-                userData.put("lastName", rs.getString("LastName"));
-                userData.put("phone", rs.getString("Mobile_Number"));
-                userData.put("address", rs.getString("Address"));
-                userData.put("status", rs.getString("Status"));
+                userData.put("userId", rs.getString("user_id"));
+                userData.put("email", rs.getString("user_email"));
+                userData.put("firstName", rs.getString("first_name"));
+                userData.put("lastName", rs.getString("last_name"));
+                userData.put("phone", rs.getString("mobile_number"));
+                userData.put("address", rs.getString("address"));
+                userData.put("status", rs.getString("status"));
                 sendResponse(exchange, 200, userData);
             } else {
                 sendResponse(exchange, 404, Map.of("error", "User not found"));
@@ -174,8 +174,8 @@ public class ProfileHandler implements HttpHandler {
                                    String email) throws SQLException {
 
         String sql =
-                "UPDATE User_Info SET FirstName=?, LastName=?, Mobile_Number=?, Address=? " +
-                "WHERE LOWER(User_Email)=?";
+                "UPDATE user_info SET first_name=?, last_name=?, mobile_number=?, address=? " +
+                "WHERE LOWER(user_email)=?";
 
         PreparedStatement stmt = conn.prepareStatement(sql);
         stmt.setString(1, getSafeString(data.get("firstName")));
@@ -197,7 +197,7 @@ public class ProfileHandler implements HttpHandler {
 
         try (Connection conn = getConnection()) {
             String sql =
-                    "UPDATE User_Info SET Status='Inactive' WHERE LOWER(User_Email)=?";
+                    "UPDATE user_info SET status='Inactive' WHERE LOWER(user_email)=?";
             PreparedStatement stmt = conn.prepareStatement(sql);
             stmt.setString(1, email);
             updated = stmt.executeUpdate() > 0;
