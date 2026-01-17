@@ -73,14 +73,14 @@ public class PaymentHandler implements HttpHandler {
     private void verifyFromClient(HttpExchange ex) throws IOException {
         Map<String, Object> p = readJson(ex);
 
-        String bookingId = str(p.get("Booking_ID"));
-        String userId = str(p.get("User_ID"));
-        String partnerId = str(p.get("Partner_ID"));
-        String hotelId = str(p.get("Hotel_ID"));
-        String orderId = str(p.get("Gateway_Order_ID"));
-        String paymentId = str(p.get("Gateway_Payment_ID"));
-        String signature = str(p.get("Gateway_Signature"));
-        double amount = toDouble(p.get("Final_Payable_Amount"));
+        String bookingId = str(p.get("booking_id"));
+        String userId = str(p.get("user_id"));
+        String partnerId = str(p.get("partner_id"));
+        String hotelId = str(p.get("hotel_id"));
+        String orderId = str(p.get("gateway_order_id"));
+        String paymentId = str(p.get("gateway_payment_id"));
+        String signature = str(p.get("gateway_signature"));
+        double amount = toDouble(p.get("final_payable_amount"));
 
         processPaymentUpdate(ex, bookingId, userId, partnerId, hotelId, orderId, paymentId, signature, amount, false);
     }
@@ -145,10 +145,10 @@ public class PaymentHandler implements HttpHandler {
     private void insertPaymentRecord(Connection conn, String prid, String bid, String uid, String pid, String hid, 
                                      String oid, String payid, String sig, String status, String failure, 
                                      double amt, int attempt) throws SQLException {
-        String sql = "INSERT INTO Payment_Transactions (Payment_Record_ID, Booking_ID, User_ID, Partner_ID, Hotel_ID, " +
-                     "Payment_Gateway, Gateway_Order_ID, Gateway_Payment_ID, Gateway_Signature, Payment_Method, " +
-                     "Payment_Status, Failure_Reason, Amount, Currency, Payment_Attempt_No, Is_Refunded, " +
-                     "Refund_Amount, Created_At, Updated_At) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())";
+        String sql = "INSERT INTO Payment_Transactions (payment_record_id, booking_id, user_id, partner_id, hotel_id, " +
+                     "payment_gateway, gateway_order_id, gateway_payment_id,gGateway_signature, payment_method, " +
+                     "payment_status, failure_reason, amount, currency, payment_attempt_no, is_refunded, " +
+                     "refund_amount, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())";
 
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, prid);
@@ -173,8 +173,8 @@ public class PaymentHandler implements HttpHandler {
     }
 
     private void updateBookingStatus(Connection conn, String bid, String status, String payId, String prid) throws SQLException {
-        String sql = "UPDATE bookings_info SET Payment_Status = ?, Transaction_ID = ?, " +
-                     "Last_Payment_Record_ID = ?, Payment_Confirmed_At = NOW(), Booking_Status = ? WHERE Booking_ID = ?";
+        String sql = "UPDATE bookings_info SET payment_status = ?, transaction_id = ?, " +
+                     "last_payment_record_id = ?, payment_confirmed_at = NOW(), booking_status = ? WHERE booking_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, status);
             ps.setString(2, payId);
@@ -186,7 +186,7 @@ public class PaymentHandler implements HttpHandler {
     }
 
     private int nextAttempt(Connection conn, String bid) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement("SELECT COUNT(*) FROM Payment_Transactions WHERE Booking_ID = ?")) {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT COUNT(*) FROM payment_transactions WHERE booking_id = ?")) {
             ps.setString(1, bid);
             ResultSet rs = ps.executeQuery();
             return rs.next() ? rs.getInt(1) + 1 : 1;
