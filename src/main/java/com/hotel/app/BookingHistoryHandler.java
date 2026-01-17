@@ -202,7 +202,7 @@ public class BookingHistoryHandler implements HttpHandler {
     // -------------------- CANCEL BOOKING --------------------
     private void handleCancelBooking(HttpExchange exchange) throws IOException {
         Map<String, Object> body = objectMapper.readValue(exchange.getRequestBody(), Map.class);
-        String bookingId = Objects.toString(body.get("Booking_ID"), "");
+        String bookingId = Objects.toString(body.get("booking_id"), "");
 
         if (bookingId.isBlank()) {
             sendResponse(exchange, 400, json("error", "Missing Booking ID"));
