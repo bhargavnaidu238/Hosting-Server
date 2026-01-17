@@ -55,7 +55,9 @@ public class PaymentHandler implements HttpHandler {
         try {
             RazorpayClient client = new RazorpayClient(RZP_KEY, RZP_SECRET);
             JSONObject orderReq = new JSONObject();
-            orderReq.put("amount", req.get("amount")); 
+            // Convert amount to paise (multiply by 100) for Razorpay
+            double amountInRupees = toDouble(req.get("amount"));
+            orderReq.put("amount", (int)(amountInRupees * 100)); 
             orderReq.put("currency", "INR");
             orderReq.put("payment_capture", 1);
 
@@ -99,6 +101,7 @@ public class PaymentHandler implements HttpHandler {
                 String paymentId = payment.getString("id");
                 double amount = payment.getDouble("amount") / 100.0;
                 
+                // Note: Webhooks usually require looking up booking_id from order_id in your DB
                 respond(ex, 200, "Webhook Processed");
             } else {
                 respond(ex, 401, "Invalid Webhook Signature");
@@ -113,7 +116,7 @@ public class PaymentHandler implements HttpHandler {
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
             conn.setAutoCommit(false);
             
-            String status = "Failed";
+            String status = "FAILED"; // Default to Upper for consistency
             String failureReason = "";
             try {
                 JSONObject attr = new JSONObject();
@@ -121,9 +124,10 @@ public class PaymentHandler implements HttpHandler {
                 attr.put("razorpay_payment_id", payid);
                 attr.put("razorpay_signature", sig);
                 Utils.verifyPaymentSignature(attr, RZP_SECRET);
-                status = "Paid";
+                status = "PAID"; 
             } catch (RazorpayException e) {
                 failureReason = e.getMessage();
+                status = "FAILED";
             }
 
             String prid = UUID.randomUUID().toString();
@@ -134,10 +138,10 @@ public class PaymentHandler implements HttpHandler {
 
             conn.commit();
             
-            // FIXED: Using the overloaded json method with 4 arguments
             if(!isWebhook) respond(ex, 200, json("status", status, "record_id", prid));
             
         } catch (Exception e) {
+            e.printStackTrace(); // Log the error for debugging
             if(!isWebhook) respond(ex, 500, json("error", e.getMessage()));
         }
     }
@@ -146,7 +150,7 @@ public class PaymentHandler implements HttpHandler {
                                      String oid, String payid, String sig, String status, String failure, 
                                      double amt, int attempt) throws SQLException {
         String sql = "INSERT INTO payment_transactions (payment_record_id, booking_id, user_id, partner_id, hotel_id, " +
-                     "payment_gateway, gateway_order_id, gateway_payment_id,gateway_signature, payment_method, " +
+                     "payment_gateway, gateway_order_id, gateway_payment_id, gateway_signature, payment_method, " +
                      "payment_status, failure_reason, amount, currency, payment_attempt_no, is_refunded, " +
                      "refund_amount, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())";
 
@@ -160,28 +164,36 @@ public class PaymentHandler implements HttpHandler {
             ps.setString(7, oid);
             ps.setString(8, payid);
             ps.setString(9, sig);
-            ps.setString(10, "Online");
+            ps.setString(10, "ONLINE");
             ps.setString(11, status);
             ps.setString(12, failure);
             ps.setDouble(13, amt);
             ps.setString(14, "INR");
             ps.setInt(15, attempt);
-            ps.setString(16, "No");
+            ps.setString(16, "NO"); // Forced Uppercase to match CHECK constraint
             ps.setDouble(17, 0.00);
             ps.executeUpdate();
         }
     }
 
-    private void updateBookingStatus(Connection conn, String bid, String status, String payId, String prid) throws SQLException {
+    private void updateBookingStatus(Connection conn, String bid, String paymentStatus, String payId, String prid) throws SQLException {
+        // Map Logic: "PAID" -> "CONFIRMED", Else -> "PENDING" (Matches CHECK constraint)
+        String finalBookingStatus = paymentStatus.equalsIgnoreCase("PAID") ? "CONFIRMED" : "PENDING";
+        
         String sql = "UPDATE bookings_info SET payment_status = ?, transaction_id = ?, " +
                      "last_payment_record_id = ?, payment_confirmed_at = NOW(), booking_status = ? WHERE booking_id = ?";
+        
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, status);
+            ps.setString(1, paymentStatus); // Sets "PAID" or "FAILED"
             ps.setString(2, payId);
             ps.setString(3, prid);
-            ps.setString(4, status.equals("Paid") ? "CONFIRMED" : "PENDING");
+            ps.setString(4, finalBookingStatus); // Sets "CONFIRMED" or "PENDING"
             ps.setString(5, bid);
-            ps.executeUpdate();
+            
+            int rowsAffected = ps.executeUpdate();
+            if (rowsAffected == 0) {
+                System.out.println("Warning: No booking found with ID: " + bid);
+            }
         }
     }
 
@@ -218,7 +230,6 @@ public class PaymentHandler implements HttpHandler {
         try { return Double.parseDouble(o.toString().replace(",", "")); } catch (Exception e) { return 0.0; }
     }
 
-    // Overloaded helper methods for JSON construction
     private String json(String k, String v) { 
         return "{\"" + k + "\":\"" + v + "\"}"; 
     }
