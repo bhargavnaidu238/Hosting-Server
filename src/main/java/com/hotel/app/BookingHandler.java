@@ -63,35 +63,23 @@ public class BookingHandler implements HttpHandler {
         String bookingId = generateBookingId();
         String userId = str(data.get("user_id"));
 
-        // Prices
+        // Price Normalization
         double originalAmount = toDouble(data.getOrDefault("total_price", data.get("original_total_price")));
         double finalAmount = toDouble(data.get("final_payable_amount"));
         double amountPaidOnline = toDouble(data.get("amount_paid_online"));
         double dueAtHotel = toDouble(data.get("due_amount_at_hotel"));
 
-        // Payment Info Logic
-        String paymentMethodType = str(data.get("payment_method_type"));
-        if (paymentMethodType.isEmpty()) {
-            paymentMethodType = str(data.get("payment_type"));
-        }
-        
-        boolean isOffline = paymentMethodType.equalsIgnoreCase("Pay at Hotel") || paymentMethodType.equalsIgnoreCase("Offline");
-        
-        String transactionId = str(data.get("transaction_id"));
-        if (transactionId.isEmpty()) {
-            if (isOffline) {
-                transactionId = "NA";
-            } else {
-                transactionId = "TXN" + System.currentTimeMillis();
-            }
-        }
-
-        String paidVia = str(data.get("paid_via"));
+        // Status Normalization (MUST be Uppercase for PostgreSQL Enum)
         String paymentStatus = normalizePaymentStatus(str(data.get("payment_status")));
+        String bookingStatus = str(data.getOrDefault("booking_status", "PENDING")).toUpperCase();
 
-        // Wallet + Coupon Logic
-        double walletRequested = toDouble(data.get("wallet_amount"));
-        String walletFlagRequest = str(data.getOrDefault("wallet_used", "No"));
+        // Wallet + Coupon Handling
+        double walletRequested = toDouble(data.get("wallet_amount_deducted"));
+        boolean walletUsedFlag = false;
+        Object wUsed = data.get("wallet_used");
+        if (wUsed instanceof Boolean) walletUsedFlag = (Boolean) wUsed;
+        else if (wUsed instanceof String) walletUsedFlag = "Yes".equalsIgnoreCase((String) wUsed) || "true".equalsIgnoreCase((String) wUsed);
+
         String couponCode = str(data.get("coupon_code"));
         double couponDiscount = toDouble(data.get("coupon_discount_amount"));
 
@@ -102,35 +90,30 @@ public class BookingHandler implements HttpHandler {
             conn = dbConfig.getCustomerDataSource().getConnection();
             conn.setAutoCommit(false);
 
-            // STRICT RULE: Wallet and Coupon allowed ONLY for Online payments
-            if (!isOffline) {
-                if ("Yes".equalsIgnoreCase(walletFlagRequest) && walletRequested > 0 && !userId.isBlank()) {
+            // Logic: Apply Wallet/Coupon only if not paying at hotel
+            if (!"Offline".equalsIgnoreCase(str(data.get("payment_method_type")))) {
+                if (walletUsedFlag && walletRequested > 0 && !userId.isBlank()) {
                     actualWalletDebited = handleWalletUsage(conn, userId, bookingId, walletRequested, originalAmount);
                 }
                 if (!couponCode.isEmpty()) {
                     handleCouponUsage(conn, userId, couponCode);
                 }
-            } else {
-                // Force reset if UI accidentally sent them for offline
-                actualWalletDebited = 0;
-                couponCode = "";
-                couponDiscount = 0;
             }
 
             String sql = """
-            	    INSERT INTO bookings_info (
-            	      partner_id, hotel_id, booking_id, hotel_name, hotel_type, guest_name, email, user_id,
-            	      check_in_date, check_out_date, guest_count, adults, children, total_rooms_booked,
-            	      total_days_at_stay, room_price_per_day, all_days_price, gst,
-            	      original_amount, final_payable_amount, amount_paid_online, due_amount_at_hotel,
-            	      payment_method_type, paid_via, payment_status, transaction_id,
-            	      wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount,
-            	      room_type, room_price_per_month, months, hotel_address, hotel_contact
-            	    )
-            	    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-            	            ?::yes_no_enum,?,?,?,?,?,?,?,?)
-            	    """;
-
+                INSERT INTO bookings_info (
+                    partner_id, hotel_id, booking_id, hotel_name, hotel_type, guest_name, email, user_id,
+                    check_in_date, check_out_date, guest_count, adults, children, total_rooms_booked,
+                    total_days_at_stay, room_price_per_day, all_days_price, gst,
+                    original_amount, final_payable_amount, amount_paid_online, due_amount_at_hotel,
+                    payment_method_type, paid_via, payment_status, transaction_id,
+                    wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount,
+                    room_type, room_price_per_month, months, hotel_address, hotel_contact, 
+                    booking_status, last_payment_record_id
+                )
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                        ?::yes_no_enum, ?, ?, ?, ?, ?, ?, ?, ?, ?::booking_status_enum, ?)
+                """;
 
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, str(data.get("partner_id")));
@@ -144,32 +127,23 @@ public class BookingHandler implements HttpHandler {
                 ps.setDate(9, parseSqlDate(data.get("check_in_date")));
                 ps.setDate(10, parseSqlDate(data.get("check_out_date")));
 
-                if (!isPgMode) {
-                    ps.setInt(11, toInt(data.get("guest_count")));
-                    ps.setInt(12, toInt(data.get("adults")));
-                    ps.setInt(13, toInt(data.get("children")));
-                    ps.setInt(14, toInt(data.get("total_rooms_booked")));
-                    ps.setInt(15, toInt(data.get("total_days_at_stay")));
-                    ps.setDouble(16, toDouble(data.get("room_price_per_day")));
-                } else {
-                    ps.setInt(11, toInt(data.get("Persons")));
-                    ps.setInt(12, toInt(data.get("Persons")));
-                    ps.setInt(13, 0);
-                    ps.setInt(14, 1);
-                    ps.setInt(15, toInt(data.get("months")));
-                    ps.setDouble(16, 0);
-                }
-
+                // Room Details Logic
+                ps.setInt(11, toInt(data.getOrDefault("guest_count", data.get("Persons"))));
+                ps.setInt(12, toInt(data.getOrDefault("adults", data.get("Persons"))));
+                ps.setInt(13, toInt(data.getOrDefault("children", 0)));
+                ps.setInt(14, toInt(data.getOrDefault("total_rooms_booked", 1)));
+                ps.setInt(15, toInt(data.getOrDefault("total_days_at_stay", data.get("months"))));
+                ps.setDouble(16, toDouble(data.getOrDefault("room_price_per_day", 0)));
                 ps.setDouble(17, toDouble(data.getOrDefault("all_days_price", data.get("All_months_Price"))));
                 ps.setDouble(18, toDouble(data.get("gst")));
                 ps.setDouble(19, originalAmount);
                 ps.setDouble(20, finalAmount);
                 ps.setDouble(21, amountPaidOnline);
                 ps.setDouble(22, dueAtHotel);
-                ps.setString(23, isOffline ? "Offline" : "Online");
-                ps.setString(24, paidVia);
-                ps.setString(25, paymentStatus);
-                ps.setString(26, transactionId);
+                ps.setString(23, str(data.get("payment_method_type")));
+                ps.setString(24, str(data.get("paid_via")));
+                ps.setString(25, paymentStatus); // PAID or PENDING
+                ps.setString(26, str(data.get("transaction_id")));
                 ps.setString(27, actualWalletDebited > 0 ? "Yes" : "No");
                 ps.setDouble(28, actualWalletDebited);
                 ps.setString(29, couponCode);
@@ -179,6 +153,8 @@ public class BookingHandler implements HttpHandler {
                 ps.setInt(33, toInt(data.getOrDefault("months", 1)));
                 ps.setString(34, str(data.get("hotel_address")));
                 ps.setString(35, str(data.get("hotel_contact")));
+                ps.setString(36, bookingStatus); // CONFIRMED or PENDING
+                ps.setString(37, str(data.get("last_payment_record_id")));
 
                 ps.executeUpdate();
             }
@@ -208,27 +184,26 @@ public class BookingHandler implements HttpHandler {
                 balance = rs.getDouble("balance");
             }
         }
-        if (wId == null || balance <= 0) return 0;
-        double debit = Math.min(balance, finalReq);
-        if (debit <= 0) return 0;
+        if (wId == null || balance < finalReq) return 0; // Guard against insufficient balance
+        
         try (PreparedStatement ps = conn.prepareStatement("UPDATE wallets SET balance = balance - ? WHERE wallet_id = ?")) {
-            ps.setDouble(1, debit);
+            ps.setDouble(1, finalReq);
             ps.setString(2, wId);
             ps.executeUpdate();
         }
         try (PreparedStatement ps = conn.prepareStatement("INSERT INTO wallet_transactions (txn_id, wallet_id, type, amount, direction, reference_id, status, description, balance_after_txn) VALUES (?,?,?,?,?,?,?,?,?)")) {
-            ps.setString(1, UUID.randomUUID().toString());
+            ps.setString(1, "WLT" + System.currentTimeMillis());
             ps.setString(2, wId);
-            ps.setString(3, "booking_payment");
-            ps.setDouble(4, debit);
-            ps.setString(5, "debit");
+            ps.setString(3, "BOOKING_PAYMENT");
+            ps.setDouble(4, finalReq);
+            ps.setString(5, "DEBIT");
             ps.setString(6, bId);
-            ps.setString(7, "success");
+            ps.setString(7, "SUCCESS");
             ps.setString(8, "Booking " + bId);
-            ps.setDouble(9, balance - debit);
+            ps.setDouble(9, balance - finalReq);
             ps.executeUpdate();
         }
-        return debit;
+        return finalReq;
     }
 
     private void handleCouponUsage(Connection conn, String uId, String code) throws SQLException {
@@ -239,8 +214,14 @@ public class BookingHandler implements HttpHandler {
             if (rs.next()) cId = rs.getString("coupon_id");
         }
         if (cId == null) return;
-        String sql = "INSERT INTO coupon_usage (usage_id, coupon_id, user_id, usage_count) VALUES (?,?,?,1) " +
-                     "ON DUPLICATE KEY UPDATE usage_count = usage_count + 1, last_used_at = NOW()";
+        
+        // POSTGRESQL UPSERT SYNTAX
+        String sql = """
+            INSERT INTO coupon_usage (usage_id, coupon_id, user_id, usage_count, last_used_at) 
+            VALUES (?,?,?,1, NOW()) 
+            ON CONFLICT (coupon_id, user_id) 
+            DO UPDATE SET usage_count = coupon_usage.usage_count + 1, last_used_at = EXCLUDED.last_used_at
+            """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, UUID.randomUUID().toString());
             ps.setString(2, cId);
@@ -254,8 +235,9 @@ public class BookingHandler implements HttpHandler {
         Map<String, Object> payload = objectMapper.readValue(body, Map.class);
         String bId = str(payload.get("booking_id"));
         String status = normalizePaymentStatus(str(payload.get("payment_status")));
+        
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
-             PreparedStatement ps = conn.prepareStatement("UPDATE bookings_info SET payment_status=? WHERE booking_id=?")) {
+             PreparedStatement ps = conn.prepareStatement("UPDATE bookings_info SET payment_status=?, booking_status='CONFIRMED' WHERE booking_id=?")) {
             ps.setString(1, status);
             ps.setString(2, bId);
             ps.executeUpdate();
@@ -265,17 +247,18 @@ public class BookingHandler implements HttpHandler {
         }
     }
 
+    // Helper methods
     private String generateBookingId() { return "BKG" + (100000 + new Random().nextInt(900000)); }
     private double toDouble(Object o) { if (o == null) return 0; try { return Double.parseDouble(o.toString().replace(",", "")); } catch (Exception e) { return 0; } }
     private int toInt(Object o) { if (o == null) return 0; try { return Integer.parseInt(o.toString()); } catch (Exception e) { return 0; } }
     private String str(Object o) { return o == null ? "" : o.toString().trim(); }
 
     private String normalizePaymentStatus(String s) {
-        if (s == null || s.isEmpty()) return "Pending";
-        String val = s.toLowerCase();
-        if (val.contains("paid") || val.contains("success")) return "Paid";
-        if (val.contains("failed")) return "Failed";
-        return "Pending";
+        if (s == null || s.isEmpty()) return "PENDING";
+        String val = s.toUpperCase();
+        if (val.contains("PAID") || val.contains("SUCCESS")) return "PAID";
+        if (val.contains("FAILED")) return "FAILED";
+        return "PENDING";
     }
 
     private java.sql.Date parseSqlDate(Object val) {
