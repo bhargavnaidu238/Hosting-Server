@@ -77,10 +77,6 @@ public class BookingHandler implements HttpHandler {
         
         boolean isOffline = paymentMethodType.equalsIgnoreCase("Pay at Hotel") || paymentMethodType.equalsIgnoreCase("Offline");
         
-        // TRANSACTION ID LOGIC: 
-        // 1. If UI provides an ID (even "NA"), use it.
-        // 2. If UI provides nothing and it's Online, generate one.
-        // 3. If UI provides nothing and it's Offline, set "NA".
         String transactionId = str(data.get("transaction_id"));
         if (transactionId.isEmpty()) {
             if (isOffline) {
@@ -122,18 +118,12 @@ public class BookingHandler implements HttpHandler {
             }
 
             String sql = """
-            	    INSERT INTO bookings_info (
-            	      partner_id, hotel_id, booking_id, hotel_name, hotel_type, guest_name, email, user_id,
-            	      check_in_date, check_out_date, guest_count, adults, children, total_rooms_booked,
-            	      total_days_at_stay, room_price_per_day, all_days_price, gst,
-            	      original_amount, final_payable_amount, amount_paid_online, due_amount_at_hotel,
-            	      payment_method_type, paid_via, payment_status, transaction_id,
-            	      wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount,
-            	      room_type, room_price_per_month, months, hotel_address, hotel_contact
-            	    )
-            	    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-            	            ?::yes_no_enum,?,?,?,?,?,?,?,?)
-            	    """;
+            	    INSERT INTO bookings_info (partner_id, hotel_id, booking_id, hotel_name, hotel_type, guest_name, email, user_id, check_in_date, check_out_date, 
+            		guest_count, adults, children, total_rooms_booked, total_days_at_stay, room_price_per_day, all_days_price, gst, original_amount, final_payable_amount, 
+            		amount_paid_online, due_amount_at_hotel, payment_method_type, paid_via, payment_status, transaction_id, wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount,
+            		room_type, room_price_per_month, months, hotel_address, hotel_contact) 
+            		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            		?::yes_no_enum, ?, ?, ?, ?, ?, ?, ?, ?)""";
 
 
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
