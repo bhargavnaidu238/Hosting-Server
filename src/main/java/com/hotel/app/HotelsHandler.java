@@ -58,16 +58,16 @@ public class HotelsHandler implements HttpHandler {
 
                 List<Map<String, Object>> hotels = new ArrayList<>();
 
-                String sql = "SELECT Hotel_ID, Partner_ID, Hotel_Name, Hotel_Type, Room_Type, Address, City, State, Country, " +
-                        "Pincode, Hotel_Location, Total_Rooms, Available_Rooms, Room_Price, Amenities, Description, " +
-                        "Policies, Rating, Hotel_Contact, About_This_Property, Hotel_Images, Customization, Status " +
-                        "FROM Hotels_info WHERE Status = 'Active'";
+                String sql = "SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, " +
+                        "pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, description, " +
+                        "policies, rating, hotel_contact, about_this_property, hotel_images, customization, status " +
+                        "FROM hotels_info WHERE status = 'Active'";
 
                 if (typeFilter != null && !typeFilter.trim().isEmpty()) {
-                    sql += " AND Hotel_Type = ?";
+                    sql += " AND hotel_type = ?";
                 }
                 if (detailsPage && hotelId != null) {
-                    sql += " AND Hotel_ID = ?";
+                    sql += " AND hotel_id = ?";
                 }
 
                 try (Connection conn = dbConfig.getPartnerDataSource().getConnection();

@@ -62,9 +62,9 @@ public class BookingHistoryHandler implements HttpHandler {
         }
 
         String sql = """
-                SELECT * FROM Bookings_Info
-                WHERE (Email=? OR User_ID=?)
-                ORDER BY Check_In_Date DESC
+                SELECT * FROM bookings_info
+                WHERE (email=? OR user_id=?)
+                ORDER BY check_in_date DESC
                 """;
 
         List<Map<String, Object>> results = new ArrayList<>();
@@ -82,16 +82,16 @@ public class BookingHistoryHandler implements HttpHandler {
             while (rs.next()) {
 
                 LocalDate checkIn =
-                        rs.getDate("Check_In_Date") != null
-                                ? rs.getDate("Check_In_Date").toLocalDate()
+                        rs.getDate("check_in_date") != null
+                                ? rs.getDate("check_in_date").toLocalDate()
                                 : null;
 
                 LocalDate checkOut =
-                        rs.getDate("Check_Out_Date") != null
-                                ? rs.getDate("Check_Out_Date").toLocalDate()
+                        rs.getDate("check_out_date") != null
+                                ? rs.getDate("check_out_date").toLocalDate()
                                 : null;
 
-                String status = Optional.ofNullable(rs.getString("Booking_Status"))
+                String status = Optional.ofNullable(rs.getString("booking_status"))
                         .orElse("")
                         .trim()
                         .toUpperCase();
@@ -142,24 +142,24 @@ public class BookingHistoryHandler implements HttpHandler {
     private void handleUpdateBookingDates(HttpExchange exchange) throws IOException {
         Map<String, Object> data = objectMapper.readValue(exchange.getRequestBody(), Map.class);
 
-        String bookingId = Objects.toString(data.get("Booking_ID"), "");
-        String newCheckIn = Objects.toString(data.get("Check_In_Date"), "");
-        String newCheckOut = Objects.toString(data.get("Check_Out_Date"), "");
+        String bookingId = Objects.toString(data.get("booking_id"), "");
+        String newCheckIn = Objects.toString(data.get("check_in_date"), "");
+        String newCheckOut = Objects.toString(data.get("check_out_date"), "");
 
         if (bookingId.isBlank() || newCheckIn.isBlank() || newCheckOut.isBlank()) {
             sendResponse(exchange, 400, json("error", "Missing parameters"));
             return;
         }
 
-        String fetchSql = "SELECT Room_Price_Per_Day, GST FROM Bookings_Info WHERE Booking_ID=?";
+        String fetchSql = "SELECT room_price_per_day, gst FROM bookings_info WHERE booking_id=?";
         String updateSql = """
-                UPDATE Bookings_Info SET
-                Check_In_Date=?, 
-                Check_Out_Date=?, 
-                Total_Days_at_Stay=?, 
-                Final_Payable_Amount=?,
-                Booking_Status='PENDING'
-                WHERE Booking_ID=?
+                UPDATE bookings_info SET
+                check_in_date=?, 
+                check_out_date=?, 
+                total_days_at_stay=?, 
+                final_payable_amount=?,
+                booking_status='PENDING'
+                WHERE booking_id=?
                 """;
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
@@ -183,7 +183,7 @@ public class BookingHistoryHandler implements HttpHandler {
                 return;
             }
 
-            double price = rs.getDouble("Room_Price_Per_Day") * days + rs.getDouble("GST");
+            double price = rs.getDouble("room_price_per_day") * days + rs.getDouble("gst");
 
             update.setDate(1, java.sql.Date.valueOf(in));
             update.setDate(2, java.sql.Date.valueOf(out));
@@ -209,7 +209,7 @@ public class BookingHistoryHandler implements HttpHandler {
             return;
         }
 
-        String sql = "UPDATE bookings_info SET Booking_Status='CANCELLED', Refund_Status='Refund Initiated' WHERE Booking_ID=?";
+        String sql = "UPDATE bookings_info SET booking_status='CANCELLED', refund_status='Refund Initiated' WHERE booking_id=?";
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {

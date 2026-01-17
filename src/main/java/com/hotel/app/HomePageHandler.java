@@ -73,28 +73,28 @@ public class HomePageHandler implements HttpHandler {
         List<Map<String, Object>> hotels = new ArrayList<>();
 
         String baseSql = """
-            SELECT Hotel_ID, Partner_ID, Hotel_Name, Hotel_Type, Room_Type,
-                   Address, City, State, Country, Pincode, Hotel_Location,
-                   Total_Rooms, Available_Rooms, Room_Price, Amenities,
-                   Description, Policies, Rating, Hotel_Contact,
-                   About_This_Property, Hotel_Images, Customization, Status
-            FROM Hotels_info
-            WHERE Status = 'Active'
+            SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type,
+                   address, city, state, country, pincode, hotel_location,
+                   total_rooms, available_rooms, room_Price, amenities,
+                   description, policies, rating, hotel_contact,
+                   about_this_property, hotel_images, customization, status
+            FROM hotels_info
+            WHERE status = 'Active'
             """;
 
         StringBuilder sql = new StringBuilder(baseSql);
 
         if (hotelType != null && !hotelType.isBlank()) {
-            sql.append(" AND LOWER(Hotel_Type) = LOWER(?)");
+            sql.append(" AND LOWER(hotel_type) = LOWER(?)");
         }
 
         if (searchQuery != null && !searchQuery.isBlank()) {
             sql.append("""
                 AND (
-                    LOWER(Hotel_Name) LIKE ?
-                    OR LOWER(City) LIKE ?
-                    OR LOWER(State) LIKE ?
-                    OR LOWER(Country) LIKE ?
+                    LOWER(hotel_name) LIKE ?
+                    OR LOWER(city) LIKE ?
+                    OR LOWER(state) LIKE ?
+                    OR LOWER(country) LIKE ?
                 )
             """);
         }
@@ -118,31 +118,31 @@ public class HomePageHandler implements HttpHandler {
                 while (rs.next()) {
                     Map<String, Object> hotel = new LinkedHashMap<>();
 
-                    hotel.put("Hotel_ID", rs.getString("Hotel_ID"));
-                    hotel.put("Partner_ID", rs.getString("Partner_ID"));
-                    hotel.put("Hotel_Name", rs.getString("Hotel_Name"));
-                    hotel.put("Hotel_Type", rs.getString("Hotel_Type"));
-                    hotel.put("Room_Type", rs.getString("Room_Type"));
-                    hotel.put("Address", rs.getString("Address"));
-                    hotel.put("City", rs.getString("City"));
-                    hotel.put("State", rs.getString("State"));
-                    hotel.put("Country", rs.getString("Country"));
-                    hotel.put("Pincode", rs.getString("Pincode"));
-                    hotel.put("Hotel_Location", rs.getString("Hotel_Location"));
-                    hotel.put("Total_Rooms", rs.getObject("Total_Rooms"));
-                    hotel.put("Available_Rooms", rs.getObject("Available_Rooms"));
-                    hotel.put("Room_Price", rs.getObject("Room_Price"));
-                    hotel.put("Amenities", rs.getString("Amenities"));
-                    hotel.put("Description", rs.getString("Description"));
-                    hotel.put("Policies", rs.getString("Policies"));
-                    hotel.put("Rating", rs.getObject("Rating"));
-                    hotel.put("Hotel_Contact", rs.getString("Hotel_Contact"));
-                    hotel.put("About_This_Property", rs.getString("About_This_Property"));
-                    hotel.put("Customization", rs.getString("Customization"));
-                    hotel.put("Status", rs.getString("Status"));
+                    hotel.put("hotel_id", rs.getString("hotel_id"));
+                    hotel.put("partner_id", rs.getString("partner_id"));
+                    hotel.put("hotel_name", rs.getString("hotel_name"));
+                    hotel.put("hotel_type", rs.getString("hotel_type"));
+                    hotel.put("room_type", rs.getString("Room_Type"));
+                    hotel.put("address", rs.getString("Address"));
+                    hotel.put("city", rs.getString("City"));
+                    hotel.put("state", rs.getString("State"));
+                    hotel.put("country", rs.getString("Country"));
+                    hotel.put("pincode", rs.getString("Pincode"));
+                    hotel.put("hotel_location", rs.getString("Hotel_Location"));
+                    hotel.put("total_rooms", rs.getObject("Total_Rooms"));
+                    hotel.put("available_rooms", rs.getObject("Available_Rooms"));
+                    hotel.put("room_price", rs.getObject("Room_Price"));
+                    hotel.put("amenities", rs.getString("Amenities"));
+                    hotel.put("description", rs.getString("Description"));
+                    hotel.put("policies", rs.getString("Policies"));
+                    hotel.put("rating", rs.getObject("Rating"));
+                    hotel.put("hotel_contact", rs.getString("Hotel_Contact"));
+                    hotel.put("about_this_property", rs.getString("About_This_Property"));
+                    hotel.put("customization", rs.getString("Customization"));
+                    hotel.put("status", rs.getString("Status"));
 
                     hotel.put("Hotel_Images",
-                            buildImageList(rs.getString("Hotel_Images")));
+                            buildImageList(rs.getString("hotel_images")));
 
                     hotels.add(hotel);
                 }
@@ -165,18 +165,18 @@ public class HomePageHandler implements HttpHandler {
         List<Map<String, Object>> pgs = new ArrayList<>();
 
         String baseSql = """
-            SELECT PG_ID, Partner_ID, PG_Name, PG_Type, Room_Type,
-                   Address, City, State, Country, Pincode,
-                   Total_Single_Sharing_Rooms,
-                   Total_Double_SHARING_ROOMS,
-                   Total_Three_SHARING_ROOMS,
-                   Total_FOUR_SHARING_ROOMS,
-                   Total_FIVE_SHARING_ROOMS,
-                   Hotel_Location, Available_Rooms, Room_Price,
-                   Amenities, Description, Policies, Rating,
-                   PG_Contact, About_This_PG, PG_Images, Status
+            SELECT pd_id, partner_id, pg_name, pg_type, room_type,
+                   address, city, state, country, pincode,
+                   total_single_sharing_rooms,
+                   total_double_sharing_rooms,
+                   total_three_sharing_rooms,
+                   total_four_sharing_rooms,
+                   total_five_sharing_rooms,
+                   hotel_location, available_rooms, room_price,
+                   amenities, description, policies, rating,
+                   pg_contact, about_this_pg, pg_images, status
             FROM paying_guest_info
-            WHERE Status = 'Active'
+            WHERE status = 'Active'
         """;
 
         StringBuilder sql = new StringBuilder(baseSql);
@@ -184,10 +184,10 @@ public class HomePageHandler implements HttpHandler {
         if (searchQuery != null && !searchQuery.isBlank()) {
             sql.append("""
                 AND (
-                    LOWER(PG_Name) LIKE ?
-                    OR LOWER(City) LIKE ?
-                    OR LOWER(State) LIKE ?
-                    OR LOWER(Country) LIKE ?
+                    LOWER(pg_name) LIKE ?
+                    OR LOWER(city) LIKE ?
+                    OR LOWER(state) LIKE ?
+                    OR LOWER(country) LIKE ?
                 )
             """);
         }
@@ -207,36 +207,34 @@ public class HomePageHandler implements HttpHandler {
                 while (rs.next()) {
                     Map<String, Object> pg = new LinkedHashMap<>();
 
-                    pg.put("PG_ID", rs.getString("PG_ID"));
-                    pg.put("Partner_ID", rs.getString("Partner_ID"));
-                    pg.put("PG_Name", rs.getString("PG_Name"));
-                    pg.put("PG_Type", rs.getString("PG_Type"));
-                    pg.put("Room_Type", rs.getString("Room_Type"));
-                    pg.put("Address", rs.getString("Address"));
-                    pg.put("City", rs.getString("City"));
-                    pg.put("State", rs.getString("State"));
-                    pg.put("Country", rs.getString("Country"));
-                    pg.put("Pincode", rs.getString("Pincode"));
+                    pg.put("pg_id", rs.getString("pg_id"));
+                    pg.put("partner_id", rs.getString("partner_id"));
+                    pg.put("pg_name", rs.getString("pg_name"));
+                    pg.put("pg_type", rs.getString("pg_type"));
+                    pg.put("room_type", rs.getString("room_type"));
+                    pg.put("address", rs.getString("address"));
+                    pg.put("city", rs.getString("city"));
+                    pg.put("state", rs.getString("state"));
+                    pg.put("country", rs.getString("country"));
+                    pg.put("pincode", rs.getString("pincode"));
 
-                    pg.put("Total_Single_Sharing_Rooms", rs.getObject("Total_Single_Sharing_Rooms"));
-                    pg.put("Total_Double_SHARING_ROOMS", rs.getObject("Total_Double_SHARING_ROOMS"));
-                    pg.put("Total_Three_SHARING_ROOMS", rs.getObject("Total_Three_SHARING_ROOMS"));
-                    pg.put("Total_FOUR_SHARING_ROOMS", rs.getObject("Total_FOUR_SHARING_ROOMS"));
-                    pg.put("Total_FIVE_SHARING_ROOMS", rs.getObject("Total_FIVE_SHARING_ROOMS"));
+                    pg.put("total_single_sharing_rooms", rs.getObject("total_single_sharing_rooms"));
+                    pg.put("total_double_sharing_rooms", rs.getObject("total_double_sharing_rooms"));
+                    pg.put("total_four_sharing_rooms", rs.getObject("total_four_sharing_rooms"));
+                    pg.put("total_four_sharing_rooms", rs.getObject("total_four_sharing_rooms"));
+                    pg.put("total_five_sharing_rooms", rs.getObject("total_five_sharing_rooms"));
 
-                    pg.put("Hotel_Location", rs.getString("Hotel_Location"));
-                    pg.put("Available_Rooms", rs.getObject("Available_Rooms"));
-                    pg.put("Room_Price", rs.getObject("Room_Price"));
-                    pg.put("Amenities", rs.getString("Amenities"));
-                    pg.put("Description", rs.getString("Description"));
-                    pg.put("Policies", rs.getString("Policies"));
-                    pg.put("Rating", rs.getObject("Rating"));
-                    pg.put("PG_Contact", rs.getString("PG_Contact"));
-                    pg.put("About_This_PG", rs.getString("About_This_PG"));
-                    pg.put("Status", rs.getString("Status"));
-
-                    pg.put("PG_Images",
-                            buildImageList(rs.getString("PG_Images")));
+                    pg.put("hotel_location", rs.getString("hotel_location"));
+                    pg.put("available_rooms", rs.getObject("available_rooms"));
+                    pg.put("room_price", rs.getObject("room_price"));
+                    pg.put("amenities", rs.getString("amenities"));
+                    pg.put("description", rs.getString("description"));
+                    pg.put("policies", rs.getString("policies"));
+                    pg.put("rating", rs.getObject("rating"));
+                    pg.put("pg_contact", rs.getString("pg_contact"));
+                    pg.put("about_this_pg", rs.getString("about_this_pg"));
+                    pg.put("status", rs.getString("status"));
+                    pg.put("pg_images", buildImageList(rs.getString("pg_images")));
 
                     pgs.add(pg);
                 }
