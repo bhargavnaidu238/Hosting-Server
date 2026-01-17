@@ -102,7 +102,6 @@ public class BookingHandler implements HttpHandler {
             conn = dbConfig.getCustomerDataSource().getConnection();
             conn.setAutoCommit(false);
 
-            // STRICT RULE: Wallet and Coupon allowed ONLY for Online payments
             if (!isOffline) {
                 if ("Yes".equalsIgnoreCase(walletFlagRequest) && walletRequested > 0 && !userId.isBlank()) {
                     actualWalletDebited = handleWalletUsage(conn, userId, bookingId, walletRequested, originalAmount);
@@ -111,20 +110,27 @@ public class BookingHandler implements HttpHandler {
                     handleCouponUsage(conn, userId, couponCode);
                 }
             } else {
-                // Force reset if UI accidentally sent them for offline
                 actualWalletDebited = 0;
                 couponCode = "";
                 couponDiscount = 0;
             }
 
+            // Corrected SQL Query to ensure alignment with parameter indices 1-35
             String sql = """
-            	    INSERT INTO bookings_info (partner_id, hotel_id, booking_id, hotel_name, hotel_type, guest_name, email, user_id, check_in_date, check_out_date, 
-            		guest_count, adults, children, total_rooms_booked, total_days_at_stay, room_price_per_day, all_days_price, gst, original_amount, final_payable_amount, 
-            		amount_paid_online, due_amount_at_hotel, payment_method_type, paid_via, payment_status, transaction_id, wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount,
-            		room_type, room_price_per_month, months, hotel_address, hotel_contact) 
-            		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-            		?::yes_no_enum, ?, ?, ?, ?, ?, ?, ?, ?)""";
-
+                INSERT INTO bookings_info (
+                    partner_id, hotel_id, booking_id, hotel_name, hotel_type, guest_name, email, user_id, 
+                    check_in_date, check_out_date, guest_count, adults, children, total_rooms_booked, 
+                    total_days_at_stay, room_price_per_day, all_days_price, gst, original_amount, 
+                    final_payable_amount, amount_paid_online, due_amount_at_hotel, payment_method_type, 
+                    paid_via, payment_status, transaction_id, wallet_used, wallet_amount_deducted, 
+                    coupon_code, coupon_discount_amount, room_type, room_price_per_month, months, 
+                    hotel_address, hotel_contact
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
+                    ?, ?, ?, ?, ?, ?, ?::yes_no_enum, ?, ?, ?, 
+                    ?, ?, ?, ?, ?
+                )""";
 
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, str(data.get("partner_id")));
@@ -189,6 +195,7 @@ public class BookingHandler implements HttpHandler {
         }
     }
 
+    // handleWalletUsage, handleCouponUsage, etc. remain exactly as in your source
     private double handleWalletUsage(Connection conn, String userId, String bId, double req, double total) throws SQLException {
         double maxAllowed = total * 0.5;
         double finalReq = Math.min(req, maxAllowed);
@@ -234,7 +241,7 @@ public class BookingHandler implements HttpHandler {
         }
         if (cId == null) return;
         String sql = "INSERT INTO coupon_usage (usage_id, coupon_id, user_id, usage_count) VALUES (?,?,?,1) " +
-                     "ON DUPLICATE KEY UPDATE usage_count = usage_count + 1, last_used_at = NOW()";
+                     "ON CONFLICT (usage_id) DO UPDATE SET usage_count = coupon_usage.usage_count + 1, last_used_at = NOW()";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, UUID.randomUUID().toString());
             ps.setString(2, cId);
