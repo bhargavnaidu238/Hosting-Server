@@ -145,7 +145,7 @@ public class PaymentHandler implements HttpHandler {
     private void insertPaymentRecord(Connection conn, String prid, String bid, String uid, String pid, String hid, 
                                      String oid, String payid, String sig, String status, String failure, 
                                      double amt, int attempt) throws SQLException {
-        String sql = "INSERT INTO Payment_Transactions (payment_record_id, booking_id, user_id, partner_id, hotel_id, " +
+        String sql = "INSERT INTO payment_transactions (payment_record_id, booking_id, user_id, partner_id, hotel_id, " +
                      "payment_gateway, gateway_order_id, gateway_payment_id,gateway_signature, payment_method, " +
                      "payment_status, failure_reason, amount, currency, payment_attempt_no, is_refunded, " +
                      "refund_amount, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())";
