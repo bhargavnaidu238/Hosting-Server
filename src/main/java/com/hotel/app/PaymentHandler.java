@@ -17,15 +17,15 @@ public class PaymentHandler implements HttpHandler {
     private final ObjectMapper mapper = new ObjectMapper();
 
     // Razorpay credentials
-    private final String RZP_KEY; 
+    private final String RZP_KEY;
     private final String RZP_SECRET;
-    private final String WEBHOOK_SECRET; 
+    private final String WEBHOOK_SECRET;
 
     public PaymentHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
         this.RZP_KEY = dbConfig.getApiKey();
-        this.RZP_SECRET = dbConfig.getAPIKeySecret();
-        this.WEBHOOK_SECRET = dbConfig.getAPIKeySecret();
+        this.RZP_SECRET = dbConfig.getApiKeySecret();        // ✅ FIX
+        this.WEBHOOK_SECRET = dbConfig.getWebhookSecret();   // ✅ FIX
     }
 
     @Override
@@ -41,7 +41,7 @@ public class PaymentHandler implements HttpHandler {
             switch (path) {
                 case "/payment/createOrder" -> createOrder(ex);
                 case "/payment/verify" -> verifyFromClient(ex);
-                case "/payment/webhook" -> handleWebhook(ex); 
+                case "/payment/webhook" -> handleWebhook(ex);
                 default -> respond(ex, 404, json("error", "Endpoint not found"));
             }
         } catch (Exception e) {
@@ -54,17 +54,26 @@ public class PaymentHandler implements HttpHandler {
         Map<String, Object> req = readJson(ex);
         try {
             RazorpayClient client = new RazorpayClient(RZP_KEY, RZP_SECRET);
+
+            double rupees = toDouble(req.get("amount"));
+            long paise = Math.round(rupees * 100);
+
             JSONObject orderReq = new JSONObject();
-            orderReq.put("amount", req.get("amount")); 
+            orderReq.put("amount", paise);
             orderReq.put("currency", "INR");
-            orderReq.put("payment_capture", 1);
+
+            // 🔥 FINAL FIX — NO BOOLEAN AMBIGUITY
+            orderReq.put("payment_capture", Integer.valueOf(1));
 
             Order order = client.orders.create(orderReq);
+
             JSONObject res = new JSONObject();
             res.put("order_id", order.get("id").toString());
             res.put("razorpay_key_id", RZP_KEY);
-            res.put("amount", order.get("amount").toString());
+            res.put("amount", paise);
+
             respond(ex, 200, res.toString());
+
         } catch (Exception e) {
             respond(ex, 500, json("error", e.getMessage()));
         }
@@ -82,23 +91,30 @@ public class PaymentHandler implements HttpHandler {
         String signature = str(p.get("gateway_signature"));
         double amount = toDouble(p.get("final_payable_amount"));
 
-        processPaymentUpdate(ex, bookingId, userId, partnerId, hotelId, orderId, paymentId, signature, amount, false);
+        processPaymentUpdate(
+                ex, bookingId, userId, partnerId, hotelId,
+                orderId, paymentId, signature, amount, false
+        );
     }
 
     private void handleWebhook(HttpExchange ex) throws IOException {
         String signature = ex.getRequestHeaders().getFirst("X-Razorpay-Signature");
-        String body = new BufferedReader(new InputStreamReader(ex.getRequestBody(), StandardCharsets.UTF_8))
-                .lines().collect(java.util.stream.Collectors.joining("\n"));
+        String body = new BufferedReader(
+                new InputStreamReader(ex.getRequestBody(), StandardCharsets.UTF_8)
+        ).lines().collect(java.util.stream.Collectors.joining("\n"));
 
         try {
             if (Utils.verifyWebhookSignature(body, signature, WEBHOOK_SECRET)) {
+
                 JSONObject json = new JSONObject(body);
-                JSONObject payment = json.getJSONObject("payload").getJSONObject("payment").getJSONObject("entity");
-                
+                JSONObject payment = json.getJSONObject("payload")
+                        .getJSONObject("payment")
+                        .getJSONObject("entity");
+
                 String orderId = payment.getString("order_id");
                 String paymentId = payment.getString("id");
                 double amount = payment.getDouble("amount") / 100.0;
-                
+
                 respond(ex, 200, "Webhook Processed");
             } else {
                 respond(ex, 401, "Invalid Webhook Signature");
@@ -108,18 +124,23 @@ public class PaymentHandler implements HttpHandler {
         }
     }
 
-    private void processPaymentUpdate(HttpExchange ex, String bid, String uid, String pid, String hid, 
-                                     String oid, String payid, String sig, double amt, boolean isWebhook) throws IOException {
+    private void processPaymentUpdate(
+            HttpExchange ex, String bid, String uid, String pid, String hid,
+            String oid, String payid, String sig,
+            double amt, boolean isWebhook) throws IOException {
+
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
             conn.setAutoCommit(false);
-            
+
             String status = "Failed";
             String failureReason = "";
+
             try {
                 JSONObject attr = new JSONObject();
                 attr.put("razorpay_order_id", oid);
                 attr.put("razorpay_payment_id", payid);
                 attr.put("razorpay_signature", sig);
+
                 Utils.verifyPaymentSignature(attr, RZP_SECRET);
                 status = "Paid";
             } catch (RazorpayException e) {
@@ -128,27 +149,36 @@ public class PaymentHandler implements HttpHandler {
 
             String prid = UUID.randomUUID().toString();
             int attemptNo = nextAttempt(conn, bid);
-            
-            insertPaymentRecord(conn, prid, bid, uid, pid, hid, oid, payid, sig, status, failureReason, amt, attemptNo);
-            updateBookingStatus(conn, bid, status, payid, prid);
 
+            insertPaymentRecord(
+                    conn, prid, bid, uid, pid, hid,
+                    oid, payid, sig, status, failureReason, amt, attemptNo
+            );
+
+            updateBookingStatus(conn, bid, status, payid, prid);
             conn.commit();
-            
-            // FIXED: Using the overloaded json method with 4 arguments
-            if(!isWebhook) respond(ex, 200, json("status", status, "record_id", prid));
-            
+
+            if (!isWebhook) {
+                respond(ex, 200, json("status", status, "record_id", prid));
+            }
+
         } catch (Exception e) {
-            if(!isWebhook) respond(ex, 500, json("error", e.getMessage()));
+            if (!isWebhook) respond(ex, 500, json("error", e.getMessage()));
         }
     }
 
-    private void insertPaymentRecord(Connection conn, String prid, String bid, String uid, String pid, String hid, 
-                                     String oid, String payid, String sig, String status, String failure, 
-                                     double amt, int attempt) throws SQLException {
-        String sql = "INSERT INTO payment_transactions (payment_record_id, booking_id, user_id, partner_id, hotel_id, " +
-                     "payment_gateway, gateway_order_id, gateway_payment_id, gateway_signature, payment_method, " +
-                     "payment_status, failure_reason, amount, currency, payment_attempt_no, is_refunded, " +
-                     "refund_amount, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())";
+    private void insertPaymentRecord(
+            Connection conn, String prid, String bid, String uid, String pid, String hid,
+            String oid, String payid, String sig, String status, String failure,
+            double amt, int attempt) throws SQLException {
+
+        String sql =
+                "INSERT INTO payment_transactions " +
+                "(payment_record_id, booking_id, user_id, partner_id, hotel_id, " +
+                "payment_gateway, gateway_order_id, gateway_payment_id, gateway_signature, " +
+                "payment_method, payment_status, failure_reason, amount, currency, " +
+                "payment_attempt_no, is_refunded, refund_amount, created_at, updated_at) " +
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())";
 
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, prid);
@@ -172,9 +202,15 @@ public class PaymentHandler implements HttpHandler {
         }
     }
 
-    private void updateBookingStatus(Connection conn, String bid, String status, String payId, String prid) throws SQLException {
-        String sql = "UPDATE bookings_info SET payment_status = ?, transaction_id = ?, " +
-                     "last_payment_record_id = ?, payment_confirmed_at = NOW(), booking_status = ? WHERE booking_id = ?";
+    private void updateBookingStatus(
+            Connection conn, String bid, String status,
+            String payId, String prid) throws SQLException {
+
+        String sql =
+                "UPDATE bookings_info SET payment_status = ?, transaction_id = ?, " +
+                "last_payment_record_id = ?, payment_confirmed_at = NOW(), booking_status = ? " +
+                "WHERE booking_id = ?";
+
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, status);
             ps.setString(2, payId);
@@ -186,7 +222,9 @@ public class PaymentHandler implements HttpHandler {
     }
 
     private int nextAttempt(Connection conn, String bid) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement("SELECT COUNT(*) FROM payment_transactions WHERE booking_id = ?")) {
+        try (PreparedStatement ps =
+                     conn.prepareStatement(
+                             "SELECT COUNT(*) FROM payment_transactions WHERE booking_id = ?")) {
             ps.setString(1, bid);
             ResultSet rs = ps.executeQuery();
             return rs.next() ? rs.getInt(1) + 1 : 1;
@@ -208,19 +246,25 @@ public class PaymentHandler implements HttpHandler {
     }
 
     private Map<String, Object> readJson(HttpExchange ex) throws IOException {
-        return mapper.readValue(new InputStreamReader(ex.getRequestBody(), StandardCharsets.UTF_8), Map.class);
+        return mapper.readValue(
+                new InputStreamReader(ex.getRequestBody(), StandardCharsets.UTF_8),
+                Map.class
+        );
     }
 
     private String str(Object o) { return o == null ? "" : o.toString(); }
-    
+
     private double toDouble(Object o) {
         if (o == null) return 0.0;
-        try { return Double.parseDouble(o.toString().replace(",", "")); } catch (Exception e) { return 0.0; }
+        try {
+            return Double.parseDouble(o.toString().replace(",", ""));
+        } catch (Exception e) {
+            return 0.0;
+        }
     }
 
-    // Overloaded helper methods for JSON construction
-    private String json(String k, String v) { 
-        return "{\"" + k + "\":\"" + v + "\"}"; 
+    private String json(String k, String v) {
+        return "{\"" + k + "\":\"" + v + "\"}";
     }
 
     private String json(String k1, String v1, String k2, String v2) {
