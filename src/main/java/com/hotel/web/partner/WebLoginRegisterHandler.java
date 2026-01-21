@@ -21,6 +21,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        // Standard CORS Headers
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
@@ -59,12 +60,11 @@ public class WebLoginRegisterHandler implements HttpHandler {
             }
         } catch (Exception e) {
             e.printStackTrace();
-            sendResponse(exchange, 500,
-                    "{\"status\":\"error\",\"message\":\"Internal server error\"}");
+            sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"Internal server error\"}");
         }
     }
 
-    // ================== LOGIN ==================
+    // ================== LOGIN (FULLY RESTORED) ==================
     private void handleLogin(HttpExchange exchange, Map<String, String> params)
             throws IOException, SQLException {
 
@@ -72,11 +72,11 @@ public class WebLoginRegisterHandler implements HttpHandler {
         String rawPassword = params.getOrDefault("password", "").trim();
 
         if (email.isEmpty() || rawPassword.isEmpty()) {
-            sendResponse(exchange, 400,
-                    "{\"status\":\"error\",\"message\":\"Email and password are required\"}");
+            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Email and password are required\"}");
             return;
         }
 
+        // Updated for Postgres Lowercase
         String query = "SELECT * FROM partner_data WHERE LOWER(email)=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -86,42 +86,36 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
             try (ResultSet rs = stmt.executeQuery()) {
                 if (!rs.next()) {
-                    sendResponse(exchange, 404,
-                            "{\"status\":\"error\",\"message\":\"Email is wrong or user not present\"}");
+                    sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Email is wrong or user not present\"}");
                     return;
                 }
 
                 String storedHash = rs.getString("password");
                 String status = rs.getString("status");
 
-                // ✅ bcrypt verification
                 if (!PasswordUtil.verifyPassword(rawPassword, storedHash)) {
-                    sendResponse(exchange, 401,
-                            "{\"status\":\"error\",\"message\":\"Password is incorrect\"}");
+                    sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Password is incorrect\"}");
                     return;
                 }
 
                 if (!"Active".equalsIgnoreCase(status)) {
-                    sendResponse(exchange, 403,
-                            "{\"status\":\"error\",\"message\":\"Inactive or deleted user. Please reach out to customer support\"}");
+                    sendResponse(exchange, 403, "{\"status\":\"error\",\"message\":\"Inactive or deleted user. Please reach out to customer support\"}");
                     return;
                 }
 
-                // Successful login (unchanged response logic)
                 Map<String, String> partnerDetails = new LinkedHashMap<>();
                 ResultSetMetaData meta = rs.getMetaData();
 
                 for (int i = 1; i <= meta.getColumnCount(); i++) {
-                    String key = meta.getColumnName(i);
+                    String key = meta.getColumnName(i).toLowerCase(); // Match Postgres
                     String val = rs.getString(i) != null ? rs.getString(i) : "";
                     partnerDetails.put(key, val);
                 }
 
-                StringBuilder sb = new StringBuilder(
-                        "{\"status\":\"success\",\"message\":\"Login successful\",");
+                StringBuilder sb = new StringBuilder("{\"status\":\"success\",\"message\":\"Login successful\",");
                 for (Map.Entry<String, String> entry : partnerDetails.entrySet()) {
                     sb.append("\"").append(entry.getKey()).append("\":\"")
-                            .append(entry.getValue().replace("\"", "\\\""))
+                            .append(escapeJson(entry.getValue())) // Added safety
                             .append("\",");
                 }
                 sb.setLength(sb.length() - 1);
@@ -132,7 +126,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
         }
     }
 
-    // ================== GET PROFILE ==================
+    // ================== GET PROFILE (FULLY RESTORED) ==================
     private void handleGetProfile(HttpExchange exchange, String email)
             throws IOException, SQLException {
 
@@ -149,7 +143,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     ResultSetMetaData meta = rs.getMetaData();
 
                     for (int i = 1; i <= meta.getColumnCount(); i++) {
-                        String key = meta.getColumnName(i);
+                        String key = meta.getColumnName(i).toLowerCase();
                         String val = rs.getString(i) != null ? rs.getString(i) : "";
                         profile.put(key, val);
                     }
@@ -157,7 +151,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     StringBuilder sb = new StringBuilder("{");
                     for (Map.Entry<String, String> entry : profile.entrySet()) {
                         sb.append("\"").append(entry.getKey()).append("\":\"")
-                                .append(entry.getValue().replace("\"", "\\\""))
+                                .append(escapeJson(entry.getValue()))
                                 .append("\",");
                     }
                     sb.setLength(sb.length() - 1);
@@ -169,11 +163,10 @@ public class WebLoginRegisterHandler implements HttpHandler {
             }
         }
 
-        sendResponse(exchange, 404,
-                "{\"status\":\"error\",\"message\":\"Partner not found\"}");
+        sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Partner not found\"}");
     }
 
-    // ================== REGISTER ==================
+    // ================== REGISTER (FULLY RESTORED) ==================
     private void handleRegister(HttpExchange exchange, Map<String, String> params)
             throws IOException, SQLException {
 
@@ -204,12 +197,10 @@ public class WebLoginRegisterHandler implements HttpHandler {
         if (gstNumber.isEmpty()) missingFields.add("gst_number");
 
         if (!missingFields.isEmpty()) {
-            sendResponse(exchange, 400,
-                    "{\"status\":\"error\",\"missing_fields\":" + missingFields + "}");
+            sendResponse(exchange, 400, "{\"status\":\"error\",\"missing_fields\":" + missingFields + "}");
             return;
         }
 
-        // ✅ Hash password
         String hashedPassword = PasswordUtil.hashPassword(rawPassword);
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
@@ -219,8 +210,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                 checkStmt.setString(1, email);
                 try (ResultSet rs = checkStmt.executeQuery()) {
                     if (rs.next()) {
-                        sendResponse(exchange, 409,
-                                "{\"status\":\"error\",\"message\":\"Email already registered\"}");
+                        sendResponse(exchange, 409, "{\"status\":\"error\",\"message\":\"Email already registered\"}");
                         return;
                     }
                 }
@@ -240,7 +230,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                 insertStmt.setString(2, partnerName);
                 insertStmt.setString(3, businessName);
                 insertStmt.setString(4, email);
-                insertStmt.setString(5, hashedPassword); // ✅ bcrypt
+                insertStmt.setString(5, hashedPassword);
                 insertStmt.setString(6, contactNumber);
                 insertStmt.setString(7, address);
                 insertStmt.setString(8, city);
@@ -254,18 +244,16 @@ public class WebLoginRegisterHandler implements HttpHandler {
             }
         }
 
-        sendResponse(exchange, 200,
-                "{\"status\":\"success\",\"message\":\"Registration successful\"}");
+        sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"Registration successful\"}");
     }
 
-    // ================== FORGOT PASSWORD ==================
+    // ================== FORGOT PASSWORD (FULLY RESTORED) ==================
     private void handleForgotPassword(HttpExchange exchange, Map<String, String> params)
             throws IOException, SQLException {
 
-        String email = params.get("email").trim().toLowerCase();
-        String rawNewPassword = params.get("newPassword").trim();
+        String email = params.getOrDefault("email", "").trim().toLowerCase();
+        String rawNewPassword = params.getOrDefault("newPassword", "").trim();
 
-        // ✅ Hash new password
         String hashedPassword = PasswordUtil.hashPassword(rawNewPassword);
 
         String updateQuery = "UPDATE partner_data SET password=? WHERE LOWER(email)=?";
@@ -278,17 +266,26 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
             int updated = stmt.executeUpdate();
             if (updated == 0) {
-                sendResponse(exchange, 404,
-                        "{\"status\":\"error\",\"message\":\"Email not found\"}");
+                sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Email not found\"}");
                 return;
             }
         }
 
-        sendResponse(exchange, 200,
-                "{\"status\":\"success\",\"message\":\"Password updated successfully\"}");
+        sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"Password updated successfully\"}");
     }
 
-    // ================== UTIL ==================
+    // ================== UTILS & JSON SAFETY ==================
+    private String escapeJson(String str) {
+        if (str == null) return "";
+        return str.replace("\\", "\\\\")
+                  .replace("\"", "\\\"")
+                  .replace("\b", "\\b")
+                  .replace("\f", "\\f")
+                  .replace("\n", "\\n")
+                  .replace("\r", "\\r")
+                  .replace("\t", "\\t");
+    }
+
     private String capitalize(String str) {
         if (str == null || str.isEmpty()) return str;
         return str.substring(0, 1).toUpperCase() + str.substring(1);
@@ -313,8 +310,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
     private void sendResponse(HttpExchange exchange, int statusCode, String message)
             throws IOException {
 
-        exchange.getResponseHeaders().add(
-                "Content-Type", "application/json; charset=UTF-8");
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
         byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(statusCode, bytes.length);
 
