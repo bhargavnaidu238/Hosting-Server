@@ -106,6 +106,9 @@ public class WebLoginRegisterHandler implements HttpHandler {
                             "{\"status\":\"error\",\"message\":\"Inactive or deleted user. Please reach out to customer support\"}");
                     return;
                 }
+                
+                System.out.println("PASSWORD RECEIVED = [" + rawPassword + "]");
+
 
                 // Successful login (unchanged response logic)
                 Map<String, String> partnerDetails = new LinkedHashMap<>();
