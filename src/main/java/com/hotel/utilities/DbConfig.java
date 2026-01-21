@@ -7,7 +7,7 @@ import javax.sql.DataSource;
 
 public final class DbConfig {
 
-    // ===== ENV VALUES =====
+    // ===== CONFIG VALUES (IMMUTABLE) =====
     private final String customerDbUrl;
     private final String partnerDbUrl;
     private final String username;
@@ -24,26 +24,38 @@ public final class DbConfig {
     private volatile HikariDataSource customerDataSource;
     private volatile HikariDataSource partnerDataSource;
 
-    // ===== Constructor =====
-    public DbConfig() {
-        this.customerDbUrl = normalizeJdbcUrl(getEnv("CUSTOMER_DB_URL"));
-        this.partnerDbUrl  = normalizeJdbcUrl(getOptionalEnv("PARTNER_DB_URL"));
+    // ===== Constructor (USED BY DbConfigLoader) =====
+    public DbConfig(
+            String customerDbUrl,
+            String partnerDbUrl,
+            String username,
+            String password,
+            String imageBaseUrl,
+            String hotelImagesPath,
+            String apiKey,
+            String apiKeySecret,
+            String webHookSecret
+    ) {
+        this.customerDbUrl = normalizeJdbcUrl(customerDbUrl);
+        this.partnerDbUrl  = partnerDbUrl != null
+                ? normalizeJdbcUrl(partnerDbUrl)
+                : null;
 
-        this.username = getEnv("DB_USERNAME");
-        this.password = getEnv("DB_PASSWORD");
+        this.username = username;
+        this.password = password;
 
-        this.imageBaseUrl    = getEnv("IMAGE_BASE_URL");
-        this.hotelImagesPath = getEnv("HOTEL_IMAGES_PATH");
+        this.imageBaseUrl = imageBaseUrl;
+        this.hotelImagesPath = hotelImagesPath;
 
-        this.apiKey        = getEnv("PAYMENT_API_KEY");
-        this.apiKeySecret  = getEnv("PAYMENT_API_SECRET");
-        this.webHookSecret = getOptionalEnv("PAYMENT_WEBHOOK_SECRET");
+        this.apiKey = apiKey;
+        this.apiKeySecret = apiKeySecret;
+        this.webHookSecret = webHookSecret;
 
-        // ---- Startup visibility (VERY IMPORTANT) ----
-        System.out.println("DB CONFIG LOADED");
-        System.out.println("   CUSTOMER_DB_URL = " + customerDbUrl);
-        if (partnerDbUrl != null) {
-            System.out.println("   PARTNER_DB_URL  = " + partnerDbUrl);
+        // ---- Startup visibility ----
+        System.out.println("✅ DB CONFIG LOADED");
+        System.out.println("   CUSTOMER_DB_URL = " + this.customerDbUrl);
+        if (this.partnerDbUrl != null) {
+            System.out.println("   PARTNER_DB_URL  = " + this.partnerDbUrl);
         }
     }
 
@@ -52,7 +64,7 @@ public final class DbConfig {
         if (customerDataSource == null) {
             synchronized (this) {
                 if (customerDataSource == null) {
-                    System.out.println("Initializing CUSTOMER DB pool");
+                    System.out.println("🔌 Initializing CUSTOMER DB pool");
                     customerDataSource = createDataSource(customerDbUrl);
                 }
             }
@@ -84,15 +96,13 @@ public final class DbConfig {
         config.setPassword(password);
         config.setDriverClassName("org.postgresql.Driver");
 
-        // ---- Render / Free-tier SAFE settings ----
+        // ---- Free-tier / Render-safe ----
         config.setMaximumPoolSize(3);
         config.setMinimumIdle(1);
-        config.setConnectionTimeout(30000);
-        config.setIdleTimeout(600000);
-        config.setMaxLifetime(1800000);
-
-        // Fail fast instead of hanging forever
-        config.setInitializationFailTimeout(10000);
+        config.setConnectionTimeout(30_000);
+        config.setIdleTimeout(600_000);
+        config.setMaxLifetime(1_800_000);
+        config.setInitializationFailTimeout(10_000);
 
         return new HikariDataSource(config);
     }
@@ -103,30 +113,10 @@ public final class DbConfig {
             throw new IllegalStateException("JDBC URL is missing");
         }
 
-        // Enforce sslmode=require for Render Postgres
         if (!url.contains("sslmode=")) {
-            if (url.contains("?")) {
-                url = url + "&sslmode=require";
-            } else {
-                url = url + "?sslmode=require";
-            }
+            url += url.contains("?") ? "&sslmode=require" : "?sslmode=require";
         }
-
         return url;
-    }
-
-    // ===== ENV HELPERS =====
-    private String getEnv(String key) {
-        String value = System.getenv(key);
-        if (value == null || value.isBlank()) {
-            throw new IllegalStateException("❌ Missing env var: " + key);
-        }
-        return value.trim();
-    }
-
-    private String getOptionalEnv(String key) {
-        String value = System.getenv(key);
-        return (value == null || value.isBlank()) ? null : value.trim();
     }
 
     // ===== Other Getters =====
@@ -142,7 +132,7 @@ public final class DbConfig {
         return apiKey;
     }
 
-    public String getAPIKeySecret() {
+    public String getApiKeySecret() {
         return apiKeySecret;
     }
 
