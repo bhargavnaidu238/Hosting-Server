@@ -91,8 +91,8 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     return;
                 }
 
-                String storedHash = rs.getString("Password");
-                String status = rs.getString("Status");
+                String storedHash = rs.getString("password");
+                String status = rs.getString("status");
 
                 // ✅ bcrypt verification
                 if (!PasswordUtil.verifyPassword(rawPassword, storedHash)) {
