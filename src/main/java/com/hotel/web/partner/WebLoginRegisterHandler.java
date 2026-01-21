@@ -77,7 +77,8 @@ public class WebLoginRegisterHandler implements HttpHandler {
             return;
         }
 
-        String query = "SELECT * FROM partner_data WHERE LOWER(Email)=?";
+        // ✅ Use lowercase column name (Postgres-safe)
+        String query = "SELECT * FROM partner_data WHERE LOWER(email)=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(query)) {
@@ -94,6 +95,17 @@ public class WebLoginRegisterHandler implements HttpHandler {
                 String storedHash = rs.getString("password");
                 String status = rs.getString("status");
 
+                // 🔍 DEBUG LOGS (WILL APPEAR IN RENDER)
+                System.out.println("LOGIN EMAIL = [" + email + "]");
+                System.out.println("PASSWORD RECEIVED = [" + rawPassword + "]");
+                System.out.println("HASH FROM DB = [" + storedHash + "]");
+
+                if (storedHash == null || storedHash.isEmpty()) {
+                    sendResponse(exchange, 500,
+                            "{\"status\":\"error\",\"message\":\"Password data corrupted. Contact support.\"}");
+                    return;
+                }
+
                 // ✅ bcrypt verification
                 if (!PasswordUtil.verifyPassword(rawPassword, storedHash)) {
                     sendResponse(exchange, 401,
@@ -106,11 +118,8 @@ public class WebLoginRegisterHandler implements HttpHandler {
                             "{\"status\":\"error\",\"message\":\"Inactive or deleted user. Please reach out to customer support\"}");
                     return;
                 }
-                
-                System.out.println("PASSWORD RECEIVED = [" + rawPassword + "]");
 
-
-                // Successful login (unchanged response logic)
+                // Successful login (UNCHANGED)
                 Map<String, String> partnerDetails = new LinkedHashMap<>();
                 ResultSetMetaData meta = rs.getMetaData();
 
@@ -134,6 +143,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
             }
         }
     }
+
 
     // ================== GET PROFILE ==================
     private void handleGetProfile(HttpExchange exchange, String email)
