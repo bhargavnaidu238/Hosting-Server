@@ -1,12 +1,14 @@
 package com.hotel.utilities;
 
 public class EncryptTool {
+	
+	public static void main(String[] args) throws Exception {
+		//String masterKey = System.getenv("CONFIG_SECRET_KEY");
+		String masterKey = "";
+		String plainPassword = "";
 
-    public static void main(String[] args) throws Exception {
+		String encrypted = CryptoUtil.encrypt(plainPassword, masterKey);
+		System.out.println(encrypted);
+	}
 
-        String plainPassword = "your_db_password_here";
-
-        String encrypted = CryptoUtil.encrypt(plainPassword);
-        System.out.println(encrypted);
-    }
 }

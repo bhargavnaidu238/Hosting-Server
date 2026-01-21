@@ -26,55 +26,59 @@ public class DbConfigLoader {
         String encryptedPass = props.getProperty("db.pass");
 
         // ===== Read Image properties =====
-        String imageBaseUrl    = props.getProperty("db.imagebaseurl");
-        String hotelImagesPath = props.getProperty("db.hotelimagespath");
-
+        String imageBaseUrl      = props.getProperty("db.imagebaseurl");
+        String hotelImagesPath   = props.getProperty("db.hotelimagespath");
+        
         // ===== Payment API properties =====
-        String apiKey        = props.getProperty("db.apikey");
-        String apiKeySecret  = props.getProperty("db.apikeysecret");
-        String webHookSecret = props.getProperty("db.webhooksecret");
+        String apiKey      = props.getProperty("db.apikey");
+        String apiKeySecret   = props.getProperty("db.apikeysecret");
+        String webHookSecret   = props.getProperty("db.webhooksecret");
 
         // ===== Validate DB properties =====
-        if (customerUrl == null || customerUrl.isBlank())
+        if (customerUrl == null || customerUrl.isBlank()) {
             throw new IllegalStateException("Missing property: db.customerurl");
-
-        if (partnerUrl == null || partnerUrl.isBlank())
+        }
+        if (partnerUrl == null || partnerUrl.isBlank()) {
             throw new IllegalStateException("Missing property: db.partnerurl");
-
-        if (user == null || user.isBlank())
+        }
+        if (user == null || user.isBlank()) {
             throw new IllegalStateException("Missing property: db.user");
-
-        if (encryptedPass == null || encryptedPass.isBlank())
+        }
+        if (encryptedPass == null || encryptedPass.isBlank()) {
             throw new IllegalStateException("Missing property: db.pass");
+        }
 
         // ===== Validate Image properties =====
-        if (imageBaseUrl == null || imageBaseUrl.isBlank())
+        if (imageBaseUrl == null || imageBaseUrl.isBlank()) {
             throw new IllegalStateException("Missing property: db.imagebaseurl");
-
-        if (hotelImagesPath == null || hotelImagesPath.isBlank())
+        }
+        if (hotelImagesPath == null || hotelImagesPath.isBlank()) {
             throw new IllegalStateException("Missing property: db.hotelimagespath");
-
-        // ===== Validate Payment API properties =====
-        if (apiKey == null || apiKey.isBlank())
+        }
+        
+        // ===== Validate Payment API Key properties =====
+        if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("Missing property: db.apikey");
-
-        if (apiKeySecret == null || apiKeySecret.isBlank())
+        }
+        if (apiKeySecret == null || apiKeySecret.isBlank()) {
             throw new IllegalStateException("Missing property: db.apikeysecret");
-
-        if (webHookSecret == null || webHookSecret.isBlank())
+        }
+        
+        if (webHookSecret == null || webHookSecret.isBlank()) {
             throw new IllegalStateException("Missing property: db.webhooksecret");
+        }
 
         // ===== Normalize image base URL =====
-        if (!imageBaseUrl.endsWith("/")) {
-            imageBaseUrl += "/";
-        }
+        imageBaseUrl = imageBaseUrl.endsWith("/")
+                ? imageBaseUrl
+                : imageBaseUrl + "/";
 
         // ===== Normalize local image path =====
         if (!hotelImagesPath.endsWith(File.separator)) {
-            hotelImagesPath += File.separator;
+            hotelImagesPath = hotelImagesPath + File.separator;
         }
 
-        // ===== Validate local image directory =====
+        // ===== Validate local image directory exists =====
         File imageDir = new File(hotelImagesPath);
         if (!imageDir.exists() || !imageDir.isDirectory()) {
             throw new IllegalStateException(
@@ -82,20 +86,18 @@ public class DbConfigLoader {
             );
         }
 
-        // ===== Decrypt DB password (CryptoUtil handles master key) =====
-        String password = CryptoUtil.decrypt(encryptedPass);
+        // ===== Load master key from ENV =====
+        String masterKey = System.getenv("CONFIG_SECRET_KEY");
+        if (masterKey == null || masterKey.isBlank()) {
+            throw new IllegalStateException(
+                "CONFIG_SECRET_KEY environment variable not set"
+            );
+        }
 
-        // ===== Return fully populated config =====
-        return new DbConfig(
-                customerUrl,
-                partnerUrl,
-                user,
-                password,
-                imageBaseUrl,
-                hotelImagesPath,
-                apiKey,
-                apiKeySecret,
-                webHookSecret
-        );
+        // ===== Decrypt password =====
+        String password = CryptoUtil.decrypt(encryptedPass, masterKey);
+
+        // ===== Return consolidated config =====
+        return new DbConfig();
     }
 }

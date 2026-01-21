@@ -18,19 +18,14 @@ public class CryptoUtil {
     private static final int ITERATIONS = 65536;
     private static final int KEY_LENGTH = 256;
 
-    // 🔐 DO NOT hardcode in real prod
-    private static final String MASTER_KEY =
-            System.getenv().getOrDefault("HOTEL_MASTER_KEY", "CHANGE_ME_NOW");
-
-    private static SecretKeySpec getKey(byte[] salt) throws Exception {
-        SecretKeyFactory factory =
-                SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
-        KeySpec spec = new PBEKeySpec(
-                MASTER_KEY.toCharArray(), salt, ITERATIONS, KEY_LENGTH);
-        return new SecretKeySpec(factory.generateSecret(spec).getEncoded(), "AES");
+    private static SecretKeySpec getKey(String password, byte[] salt) throws Exception {
+        SecretKeyFactory factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256");
+        KeySpec spec = new PBEKeySpec(password.toCharArray(), salt, ITERATIONS, KEY_LENGTH);
+        byte[] keyBytes = factory.generateSecret(spec).getEncoded();
+        return new SecretKeySpec(keyBytes, "AES");
     }
 
-    public static String encrypt(String plainText) throws Exception {
+    public static String encrypt(String plainText, String password) throws Exception {
         byte[] salt = new byte[16];
         byte[] iv = new byte[IV_LENGTH];
         SecureRandom random = new SecureRandom();
@@ -38,19 +33,17 @@ public class CryptoUtil {
         random.nextBytes(iv);
 
         Cipher cipher = Cipher.getInstance(ALGO);
-        cipher.init(Cipher.ENCRYPT_MODE, getKey(salt),
+        cipher.init(Cipher.ENCRYPT_MODE, getKey(password, salt),
                 new GCMParameterSpec(TAG_LENGTH, iv));
 
-        byte[] cipherText =
-                cipher.doFinal(plainText.getBytes(StandardCharsets.UTF_8));
+        byte[] cipherText = cipher.doFinal(plainText.getBytes(StandardCharsets.UTF_8));
 
-        return "ENC(" +
-                Base64.getEncoder().encodeToString(salt) + ":" +
+        return "ENC(" + Base64.getEncoder().encodeToString(salt) + ":" +
                 Base64.getEncoder().encodeToString(iv) + ":" +
                 Base64.getEncoder().encodeToString(cipherText) + ")";
     }
 
-    public static String decrypt(String encrypted) throws Exception {
+    public static String decrypt(String encrypted, String password) throws Exception {
         encrypted = encrypted.replace("ENC(", "").replace(")", "");
         String[] parts = encrypted.split(":");
 
@@ -59,7 +52,7 @@ public class CryptoUtil {
         byte[] cipherText = Base64.getDecoder().decode(parts[2]);
 
         Cipher cipher = Cipher.getInstance(ALGO);
-        cipher.init(Cipher.DECRYPT_MODE, getKey(salt),
+        cipher.init(Cipher.DECRYPT_MODE, getKey(password, salt),
                 new GCMParameterSpec(TAG_LENGTH, iv));
 
         return new String(cipher.doFinal(cipherText), StandardCharsets.UTF_8);
