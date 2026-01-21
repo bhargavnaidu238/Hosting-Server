@@ -101,7 +101,7 @@ public class WebDashBoardHandler implements HttpHandler {
                     SUM(CASE WHEN Booking_Status='COMPLETED'  THEN 1 ELSE 0 END) AS completed,
                     SUM(CASE WHEN Booking_Status='CANCELLED'  THEN 1 ELSE 0 END) AS cancelled
                 FROM bookings_info
-                WHERE Partner_ID = ?
+                WHERE partner_id = ?
                 """;
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
@@ -127,9 +127,9 @@ public class WebDashBoardHandler implements HttpHandler {
     private FinanceData getFinanceStats(String partnerId) throws Exception {
         String sql =
                 """
-                SELECT Total_Revenue, Net_Revenue, Pending_Payout, Paid_Payout
-                FROM Partner_Finance
-                WHERE Partner_ID = ?
+                SELECT total_revenue, net_revenue, pending_payout, paid_payout
+                FROM partner_finance
+                WHERE partner_id = ?
                 """;
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -140,10 +140,10 @@ public class WebDashBoardHandler implements HttpHandler {
 
             FinanceData f = new FinanceData();
             if (rs.next()) {
-                f.totalRevenue  = rs.getDouble("Total_Revenue");
-                f.netRevenue    = rs.getDouble("Net_Revenue");
-                f.pendingPayout = rs.getDouble("Pending_Payout");
-                f.paidPayout    = rs.getDouble("Paid_Payout");
+                f.totalRevenue  = rs.getDouble("total_revenue");
+                f.netRevenue    = rs.getDouble("net_revenue");
+                f.pendingPayout = rs.getDouble("pending_payout");
+                f.paidPayout    = rs.getDouble("paid_payout");
             }
             return f;
         }
@@ -155,11 +155,11 @@ public class WebDashBoardHandler implements HttpHandler {
 
         String sql =
                 """
-                SELECT Status
-                FROM Partner_Transactions
-                WHERE Partner_ID = ?
-                AND Transaction_Type = 'PAYOUT'
-                ORDER BY Transaction_Date DESC
+                SELECT status
+                FROM partner_transactions
+                WHERE partner_id = ?
+                AND transaction_type = 'PAYOUT'
+                ORDER BY transaction_date DESC
                 LIMIT 1
                 """;
 
@@ -170,7 +170,7 @@ public class WebDashBoardHandler implements HttpHandler {
             ResultSet rs = stmt.executeQuery();
 
             if (rs.next()) {
-                return rs.getString("Status");  // Pending, Requested, Success, Failed
+                return rs.getString("status");  // Pending, Requested, Success, Failed
             }
         }
         return null;
