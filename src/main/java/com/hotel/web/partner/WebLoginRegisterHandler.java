@@ -95,12 +95,6 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     return;
                 }
                 String status = rs.getString("status");
-
-                if (!PasswordUtil.verifyPassword(rawPassword, storedHash)) {
-                    sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Password is incorrect\"}");
-                    return;
-                }
-
                 if (!"Active".equalsIgnoreCase(status)) {
                     sendResponse(exchange, 403, "{\"status\":\"error\",\"message\":\"Inactive or deleted user. Please reach out to customer support\"}");
                     return;
@@ -181,7 +175,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
         String state = capitalize(params.getOrDefault("state", ""));
         String country = capitalize(params.getOrDefault("country", ""));
         String contactNumber = params.getOrDefault("contact_number", "").trim();
-        String rawPassword = params.getOrDefault("password", "").trim();
+        String rawPassword = params.getOrDefault("password", "");
         String pincode = params.getOrDefault("pincode", "").trim();
         String gstNumber = params.getOrDefault("gst_number", "").trim();
 
