@@ -233,10 +233,10 @@ public class WebLoginRegisterHandler implements HttpHandler {
             Timestamp registrationDate = new Timestamp(System.currentTimeMillis());
 
             String insertQuery =
-                    "INSERT INTO partner_data " +
-                    "(Partner_ID, Partner_Name, Business_Name, Email, Password, Contact_Number, " +
-                    "Address, City, State, Country, Pincode, GST_Number, Registration_Date, Status) " +
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            	    "INSERT INTO partner_data " +
+            	    "(partner_id, partner_name, business_name, email, password, contact_number, " +
+            	    "address, city, state, country, pincode, gst_number, registration_date, status) " +
+            	    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::status_enum)";
 
             try (PreparedStatement insertStmt = conn.prepareStatement(insertQuery)) {
                 insertStmt.setString(1, uniqueID);
