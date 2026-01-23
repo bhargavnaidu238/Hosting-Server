@@ -77,7 +77,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
             return;
         }
 
-        // ✅ Use lowercase column name (Postgres-safe)
+        // ✅ Postgres-safe column usage
         String query = "SELECT * FROM partner_data WHERE LOWER(email)=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -86,19 +86,30 @@ public class WebLoginRegisterHandler implements HttpHandler {
             stmt.setString(1, email);
 
             try (ResultSet rs = stmt.executeQuery()) {
+
                 if (!rs.next()) {
                     sendResponse(exchange, 404,
                             "{\"status\":\"error\",\"message\":\"Email is wrong or user not present\"}");
                     return;
                 }
 
+                // 🔥 CRITICAL FIX: CHAR column padding removal
                 String storedHash = rs.getString("password");
+                if (storedHash != null) {
+                    storedHash = storedHash.trim();   // ✅ FIX
+                }
+
                 String status = rs.getString("status");
 
-                // 🔍 DEBUG LOGS (WILL APPEAR IN RENDER)
-                System.out.println("LOGIN EMAIL = [" + email + "]");
-                System.out.println("PASSWORD RECEIVED = [" + rawPassword + "]");
-                System.out.println("HASH FROM DB = [" + storedHash + "]");
+                // ================= DEBUG LOGS (RENDER) =================
+                System.out.println("========== LOGIN DEBUG START ==========");
+                System.out.println("LOGIN EMAIL        = [" + email + "]");
+                System.out.println("PASSWORD RECEIVED  = [" + rawPassword + "]");
+                System.out.println("HASH FROM DB(TRIM) = [" + storedHash + "]");
+                System.out.println("STATUS             = [" + status + "]");
+                System.out.println("PARTNER_ID         = [" + rs.getString("partner_id") + "]");
+                System.out.println("========== LOGIN DEBUG END ==========");
+                // ========================================================
 
                 if (storedHash == null || storedHash.isEmpty()) {
                     sendResponse(exchange, 500,
@@ -107,7 +118,10 @@ public class WebLoginRegisterHandler implements HttpHandler {
                 }
 
                 // ✅ bcrypt verification
-                if (!PasswordUtil.verifyPassword(rawPassword, storedHash)) {
+                boolean passwordMatches = PasswordUtil.verifyPassword(rawPassword, storedHash);
+                System.out.println("BCRYPT MATCH RESULT = " + passwordMatches);
+
+                if (!passwordMatches) {
                     sendResponse(exchange, 401,
                             "{\"status\":\"error\",\"message\":\"Password is incorrect\"}");
                     return;
@@ -119,7 +133,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     return;
                 }
 
-                // Successful login (UNCHANGED)
+                // ================= SUCCESS RESPONSE =================
                 Map<String, String> partnerDetails = new LinkedHashMap<>();
                 ResultSetMetaData meta = rs.getMetaData();
 
@@ -143,7 +157,6 @@ public class WebLoginRegisterHandler implements HttpHandler {
             }
         }
     }
-
 
     // ================== GET PROFILE ==================
     private void handleGetProfile(HttpExchange exchange, String email)
