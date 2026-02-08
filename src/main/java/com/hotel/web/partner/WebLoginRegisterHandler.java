@@ -47,18 +47,31 @@ public class WebLoginRegisterHandler implements HttpHandler {
         }
 
         Map<String, String> params = parseForm(body);
-        String path = exchange.getRequestURI().getPath();
+
+        // 🔥 FIX #1 — Normalize path (handles /weblogin%0A, /weblogin/)
+        String path = exchange.getRequestURI()
+                .getPath()
+                .trim()
+                .replaceAll("/+$", "");
 
         try {
             if (path.equals("/forgotpassword")) {
                 handleForgotPassword(exchange, params);
+
             } else if (path.equals("/webgetprofile") && params.containsKey("email")) {
                 handleGetProfile(exchange, params.get("email").trim().toLowerCase());
-            } else if (params.containsKey("email") && params.containsKey("password") && params.size() == 2) {
+
+            // 🔥 FIX #2 — Explicit login routing
+            } else if (path.equals("/weblogin")
+                    && params.containsKey("email")
+                    && params.containsKey("password")) {
+
                 handleLogin(exchange, params);
+
             } else {
                 handleRegister(exchange, params);
             }
+
         } catch (Exception e) {
             e.printStackTrace();
             sendResponse(exchange, 500,
@@ -97,7 +110,6 @@ public class WebLoginRegisterHandler implements HttpHandler {
                 String storedHash = rs.getString("Password");
                 String status = rs.getString("Status");
 
-                // bcrypt verification
                 if (!PasswordUtil.verifyPassword(rawPassword, storedHash)) {
                     sendResponse(exchange, 401,
                             "{\"status\":\"error\",\"message\":\"Password is incorrect\"}");
@@ -110,24 +122,21 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     return;
                 }
 
-                // ================= 🔥 FIXED SUCCESS RESPONSE =================
                 String partnerId = rs.getString("Partner_ID");
                 String partnerEmail = rs.getString("Email");
 
+                // ✅ SUCCESS RESPONSE (Flutter compatible)
                 StringBuilder sb = new StringBuilder();
                 sb.append("{");
                 sb.append("\"status\":\"success\",");
                 sb.append("\"message\":\"Login successful\",");
                 sb.append("\"Partner_ID\":\"").append(partnerId).append("\",");
                 sb.append("\"Email\":\"").append(partnerEmail).append("\",");
-
-                // 🔑 normalized keys for Flutter
                 sb.append("\"partner_id\":\"").append(partnerId).append("\",");
                 sb.append("\"email\":\"").append(partnerEmail).append("\"");
                 sb.append("}");
 
                 sendResponse(exchange, 200, sb.toString());
-                // =============================================================
             }
         }
     }
