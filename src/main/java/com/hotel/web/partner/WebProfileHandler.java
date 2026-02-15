@@ -11,7 +11,7 @@ import java.util.*;
 
 public class WebProfileHandler implements HttpHandler {
 
-    private static final Set<String> readOnlyFields = Set.of("Email", "Status", "Registration_Date");
+    private static final Set<String> readOnlyFields = Set.of("email", "user_status", "registration_date");
 
     private final DbConfig dbConfig;
 
@@ -69,7 +69,7 @@ public class WebProfileHandler implements HttpHandler {
             return;
         }
 
-        String query = "SELECT * FROM partner_data WHERE LOWER(Email)=?";
+        String query = "SELECT * FROM partner_data WHERE LOWER(email)=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(query)) {
             stmt.setString(1, loggedInEmail);
@@ -130,7 +130,7 @@ public class WebProfileHandler implements HttpHandler {
         }
         setClause.setLength(setClause.length() - 1);
 
-        String updateQuery = "UPDATE partner_data SET " + setClause + " WHERE LOWER(Email)=?";
+        String updateQuery = "UPDATE partner_data SET " + setClause + " WHERE LOWER(email)=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement updateStmt = conn.prepareStatement(updateQuery)) {
             int index = 1;
@@ -158,9 +158,9 @@ public class WebProfileHandler implements HttpHandler {
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
 
-            //Fetch stored bcrypt hash
+            // 1️⃣ Fetch stored bcrypt hash
             String storedHash;
-            String checkQuery = "SELECT Password FROM partner_data WHERE LOWER(Email)=?";
+            String checkQuery = "SELECT password FROM partner_data WHERE LOWER(email)=?";
 
             try (PreparedStatement stmt = conn.prepareStatement(checkQuery)) {
                 stmt.setString(1, loggedInEmail);
@@ -170,22 +170,22 @@ public class WebProfileHandler implements HttpHandler {
                                 "{\"status\":\"error\",\"message\":\"User not found\"}");
                         return;
                     }
-                    storedHash = rs.getString("Password");
+                    storedHash = rs.getString("password");
                 }
             }
 
-            //Verify CURRENT password using bcrypt
+            // 2️⃣ Verify CURRENT password using bcrypt
             if (!PasswordUtil.verifyPassword(currentPassword, storedHash)) {
                 sendResponse(exchange, 401,
                         "{\"status\":\"error\",\"message\":\"Current password does not match\"}");
                 return;
             }
 
-            //Hash NEW password
+            // 3️⃣ Hash NEW password
             String newHashedPassword = PasswordUtil.hashPassword(newPassword);
 
-            //Update DB with hashed password
-            String updateQuery = "UPDATE partner_data SET Password=? WHERE LOWER(Email)=?";
+            // 4️⃣ Update DB with hashed password
+            String updateQuery = "UPDATE partner_data SET Password=? WHERE LOWER(email)=?";
             try (PreparedStatement stmt = conn.prepareStatement(updateQuery)) {
                 stmt.setString(1, newHashedPassword);
                 stmt.setString(2, loggedInEmail);
@@ -211,7 +211,7 @@ public class WebProfileHandler implements HttpHandler {
         }
 
         String updateQuery =
-                "UPDATE partner_data SET Status='Inactive' WHERE LOWER(Email)=?";
+                "UPDATE partner_data SET user_status='Inactive' WHERE LOWER(email)=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(updateQuery)) {

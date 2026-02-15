@@ -19,8 +19,10 @@ public class WebLoginRegisterHandler implements HttpHandler {
         this.dbConfig = dbConfig;
     }
 
+    //Updated the Status to user_status
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
@@ -38,6 +40,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
         String body;
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
+
             StringBuilder sb = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) sb.append(line);
@@ -45,18 +48,31 @@ public class WebLoginRegisterHandler implements HttpHandler {
         }
 
         Map<String, String> params = parseForm(body);
-        String path = exchange.getRequestURI().getPath();
+
+        // 🔥 FIX #1 — Normalize path (handles /weblogin%0A, /weblogin/)
+        String path = exchange.getRequestURI()
+                .getPath()
+                .trim()
+                .replaceAll("/+$", "");
 
         try {
             if (path.equals("/forgotpassword")) {
                 handleForgotPassword(exchange, params);
+
             } else if (path.equals("/webgetprofile") && params.containsKey("email")) {
                 handleGetProfile(exchange, params.get("email").trim().toLowerCase());
-            } else if (params.containsKey("email") && params.containsKey("password") && params.size() == 2) {
+
+            // 🔥 FIX #2 — Explicit login routing
+            } else if (path.equals("/weblogin")
+                    && params.containsKey("email")
+                    && params.containsKey("password")) {
+
                 handleLogin(exchange, params);
+
             } else {
                 handleRegister(exchange, params);
             }
+
         } catch (Exception e) {
             e.printStackTrace();
             sendResponse(exchange, 500,
@@ -77,7 +93,6 @@ public class WebLoginRegisterHandler implements HttpHandler {
             return;
         }
 
-        // ✅ Postgres-safe column usage
         String query = "SELECT * FROM partner_data WHERE LOWER(email)=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -93,35 +108,10 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     return;
                 }
 
-                // 🔥 CRITICAL FIX: CHAR column padding removal
                 String storedHash = rs.getString("password");
-                if (storedHash != null) {
-                    storedHash = storedHash.trim();   // ✅ FIX
-                }
+                String status = rs.getString("user_status");
 
-                String status = rs.getString("status");
-
-                // ================= DEBUG LOGS (RENDER) =================
-                System.out.println("========== LOGIN DEBUG START ==========");
-                System.out.println("LOGIN EMAIL        = [" + email + "]");
-                System.out.println("PASSWORD RECEIVED  = [" + rawPassword + "]");
-                System.out.println("HASH FROM DB(TRIM) = [" + storedHash + "]");
-                System.out.println("STATUS             = [" + status + "]");
-                System.out.println("PARTNER_ID         = [" + rs.getString("partner_id") + "]");
-                System.out.println("========== LOGIN DEBUG END ==========");
-                // ========================================================
-
-                if (storedHash == null || storedHash.isEmpty()) {
-                    sendResponse(exchange, 500,
-                            "{\"status\":\"error\",\"message\":\"Password data corrupted. Contact support.\"}");
-                    return;
-                }
-
-                // ✅ bcrypt verification
-                boolean passwordMatches = PasswordUtil.verifyPassword(rawPassword, storedHash);
-                System.out.println("BCRYPT MATCH RESULT = " + passwordMatches);
-
-                if (!passwordMatches) {
+                if (!PasswordUtil.verifyPassword(rawPassword, storedHash)) {
                     sendResponse(exchange, 401,
                             "{\"status\":\"error\",\"message\":\"Password is incorrect\"}");
                     return;
@@ -133,24 +123,18 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     return;
                 }
 
-                // ================= SUCCESS RESPONSE =================
-                Map<String, String> partnerDetails = new LinkedHashMap<>();
-                ResultSetMetaData meta = rs.getMetaData();
+                String partnerId = rs.getString("partner_id");
+                String partnerEmail = rs.getString("email");
 
-                for (int i = 1; i <= meta.getColumnCount(); i++) {
-                    String key = meta.getColumnName(i);
-                    String val = rs.getString(i) != null ? rs.getString(i) : "";
-                    partnerDetails.put(key, val);
-                }
-
-                StringBuilder sb = new StringBuilder(
-                        "{\"status\":\"success\",\"message\":\"Login successful\",");
-                for (Map.Entry<String, String> entry : partnerDetails.entrySet()) {
-                    sb.append("\"").append(entry.getKey()).append("\":\"")
-                            .append(entry.getValue().replace("\"", "\\\""))
-                            .append("\",");
-                }
-                sb.setLength(sb.length() - 1);
+                // ✅ SUCCESS RESPONSE (Flutter compatible)
+                StringBuilder sb = new StringBuilder();
+                sb.append("{");
+                sb.append("\"status\":\"success\",");
+                sb.append("\"message\":\"Login successful\",");
+                sb.append("\"Partner_ID\":\"").append(partnerId).append("\",");
+                sb.append("\"Email\":\"").append(partnerEmail).append("\",");
+                sb.append("\"partner_id\":\"").append(partnerId).append("\",");
+                sb.append("\"email\":\"").append(partnerEmail).append("\"");
                 sb.append("}");
 
                 sendResponse(exchange, 200, sb.toString());
@@ -162,7 +146,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
     private void handleGetProfile(HttpExchange exchange, String email)
             throws IOException, SQLException {
 
-        String query = "SELECT * FROM partner_data WHERE LOWER(Email)=?";
+        String query = "SELECT * FROM partner_data WHERE LOWER(email)=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(query)) {
@@ -235,12 +219,11 @@ public class WebLoginRegisterHandler implements HttpHandler {
             return;
         }
 
-        // ✅ Hash password
         String hashedPassword = PasswordUtil.hashPassword(rawPassword);
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
 
-            String checkQuery = "SELECT Partner_ID FROM partner_data WHERE LOWER(Email)=?";
+            String checkQuery = "SELECT partner_id FROM partner_data WHERE LOWER(email)=?";
             try (PreparedStatement checkStmt = conn.prepareStatement(checkQuery)) {
                 checkStmt.setString(1, email);
                 try (ResultSet rs = checkStmt.executeQuery()) {
@@ -256,17 +239,17 @@ public class WebLoginRegisterHandler implements HttpHandler {
             Timestamp registrationDate = new Timestamp(System.currentTimeMillis());
 
             String insertQuery =
-            	    "INSERT INTO partner_data " +
-            	    "(partner_id, partner_name, business_name, email, password, contact_number, " +
-            	    "address, city, state, country, pincode, gst_number, registration_date, status) " +
-            	    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::status_enum)";
+                    "INSERT INTO partner_data " +
+                            "(partner_id, partner_name, business_name, email, password, contact_number, " +
+                            "address, city, state, country, pincode, gst_number, registration_date, user_status) " +
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
             try (PreparedStatement insertStmt = conn.prepareStatement(insertQuery)) {
                 insertStmt.setString(1, uniqueID);
                 insertStmt.setString(2, partnerName);
                 insertStmt.setString(3, businessName);
                 insertStmt.setString(4, email);
-                insertStmt.setString(5, hashedPassword); // ✅ bcrypt
+                insertStmt.setString(5, hashedPassword);
                 insertStmt.setString(6, contactNumber);
                 insertStmt.setString(7, address);
                 insertStmt.setString(8, city);
@@ -291,10 +274,9 @@ public class WebLoginRegisterHandler implements HttpHandler {
         String email = params.get("email").trim().toLowerCase();
         String rawNewPassword = params.get("newPassword").trim();
 
-        // ✅ Hash new password
         String hashedPassword = PasswordUtil.hashPassword(rawNewPassword);
 
-        String updateQuery = "UPDATE partner_data SET Password=? WHERE LOWER(Email)=?";
+        String updateQuery = "UPDATE partner_data SET Password=? WHERE LOWER(email)=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(updateQuery)) {
