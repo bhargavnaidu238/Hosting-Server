@@ -148,7 +148,7 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setString(19, params.getOrDefault("hotel_contact", ""));
         stmt.setString(20, params.getOrDefault("about_this_property", ""));
         stmt.setString(21, params.getOrDefault("hotel_images", null));
-        stmt.setString(22, params.getOrDefault("customization", "No"));
+        stmt.setString(22, params.getOrDefault("customization", "NO"));
         stmt.setString(23, params.getOrDefault("status", "Active"));
     }
 
