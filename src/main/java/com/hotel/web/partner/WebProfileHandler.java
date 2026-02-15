@@ -62,40 +62,66 @@ public class WebProfileHandler implements HttpHandler {
     }
 
     //================== GET PROFILE ==================
-    private void handleGetProfile(HttpExchange exchange, Map<String, String> params) throws IOException, SQLException {
+    private void handleGetProfile(HttpExchange exchange, Map<String, String> params)
+            throws IOException, SQLException {
+
         String loggedInEmail = params.getOrDefault("loggedInEmail", "").trim().toLowerCase();
+
         if (loggedInEmail.isEmpty()) {
-            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Logged-in email is required\"}");
+            sendResponse(exchange, 400,
+                    "{\"status\":\"error\",\"message\":\"Logged-in email is required\"}");
             return;
         }
 
         String query = "SELECT * FROM partner_data WHERE LOWER(email)=?";
+
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(query)) {
+
             stmt.setString(1, loggedInEmail);
+
             try (ResultSet rs = stmt.executeQuery()) {
+
                 if (rs.next()) {
+
                     Map<String, String> partnerData = new LinkedHashMap<>();
                     ResultSetMetaData meta = rs.getMetaData();
+
                     for (int i = 1; i <= meta.getColumnCount(); i++) {
-                        String key = meta.getColumnName(i);
-                        String val = rs.getString(i) != null ? rs.getString(i) : "";
-                        partnerData.put(key, val);
+
+                        String columnName = meta.getColumnName(i);
+                        String value = rs.getString(i) != null ? rs.getString(i) : "";
+
+                        String formattedKey = formatColumnName(columnName);
+
+                        partnerData.put(formattedKey, value);
                     }
+
                     StringBuilder json = new StringBuilder("{\"status\":\"success\",\"data\":{");
+
                     for (Map.Entry<String, String> entry : partnerData.entrySet()) {
-                        json.append("\"").append(escapeJson(entry.getKey())).append("\":\"")
-                                .append(escapeJson(entry.getValue())).append("\",");
+                        json.append("\"")
+                            .append(escapeJson(entry.getKey()))
+                            .append("\":\"")
+                            .append(escapeJson(entry.getValue()))
+                            .append("\",");
                     }
-                    if (json.charAt(json.length() - 1) == ',') json.setLength(json.length() - 1);
+
+                    if (json.charAt(json.length() - 1) == ',')
+                        json.setLength(json.length() - 1);
+
                     json.append("}}");
+
                     sendResponse(exchange, 200, json.toString());
                     return;
                 }
             }
         }
-        sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Partner not found\"}");
+
+        sendResponse(exchange, 404,
+                "{\"status\":\"error\",\"message\":\"Partner not found\"}");
     }
+
 
     //================== UPDATE PROFILE ==================
     private void handleUpdateProfile(HttpExchange exchange, Map<String, String> params) throws IOException, SQLException {
