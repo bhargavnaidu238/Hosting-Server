@@ -92,7 +92,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
             return;
         }
 
-        String query = "SELECT * FROM partner_data WHERE LOWER(Email)=?";
+        String query = "SELECT * FROM partner_data WHERE LOWER(email)=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(query)) {
@@ -107,7 +107,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     return;
                 }
 
-                String storedHash = rs.getString("Password");
+                String storedHash = rs.getString("password");
                 String status = rs.getString("user_status");
 
                 if (!PasswordUtil.verifyPassword(rawPassword, storedHash)) {
@@ -122,8 +122,8 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     return;
                 }
 
-                String partnerId = rs.getString("Partner_ID");
-                String partnerEmail = rs.getString("Email");
+                String partnerId = rs.getString("partner_id");
+                String partnerEmail = rs.getString("email");
 
                 // ✅ SUCCESS RESPONSE (Flutter compatible)
                 StringBuilder sb = new StringBuilder();
@@ -145,7 +145,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
     private void handleGetProfile(HttpExchange exchange, String email)
             throws IOException, SQLException {
 
-        String query = "SELECT * FROM partner_data WHERE LOWER(Email)=?";
+        String query = "SELECT * FROM partner_data WHERE LOWER(email)=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(query)) {
@@ -222,7 +222,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
 
-            String checkQuery = "SELECT Partner_ID FROM partner_data WHERE LOWER(Email)=?";
+            String checkQuery = "SELECT partner_id FROM partner_data WHERE LOWER(email)=?";
             try (PreparedStatement checkStmt = conn.prepareStatement(checkQuery)) {
                 checkStmt.setString(1, email);
                 try (ResultSet rs = checkStmt.executeQuery()) {
@@ -239,8 +239,8 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
             String insertQuery =
                     "INSERT INTO partner_data " +
-                            "(Partner_ID, Partner_Name, Business_Name, Email, Password, Contact_Number, " +
-                            "Address, City, State, Country, Pincode, GST_Number, Registration_Date, user_status) " +
+                            "(partner_id, partner_name, business_name, email, password, contact_number, " +
+                            "address, city, state, country, pincode, gst_number, registration_date, user_status) " +
                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
             try (PreparedStatement insertStmt = conn.prepareStatement(insertQuery)) {
@@ -275,7 +275,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
         String hashedPassword = PasswordUtil.hashPassword(rawNewPassword);
 
-        String updateQuery = "UPDATE partner_data SET Password=? WHERE LOWER(Email)=?";
+        String updateQuery = "UPDATE partner_data SET Password=? WHERE LOWER(email)=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(updateQuery)) {
