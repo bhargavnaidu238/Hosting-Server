@@ -26,6 +26,7 @@ public final class DbConfig {
 
     // ===== Constructor =====
     public DbConfig() {
+
         this.customerDbUrl = normalizeJdbcUrl(getEnv("CUSTOMER_DB_URL"));
         this.partnerDbUrl  = normalizeJdbcUrl(getOptionalEnv("PARTNER_DB_URL"));
 
@@ -39,15 +40,14 @@ public final class DbConfig {
         this.apiKeySecret  = getEnv("PAYMENT_API_SECRET");
         this.webHookSecret = getOptionalEnv("PAYMENT_WEBHOOK_SECRET");
 
-        // ---- Startup visibility (VERY IMPORTANT) ----
         System.out.println("DB CONFIG LOADED");
-        System.out.println("   CUSTOMER_DB_URL = " + customerDbUrl);
+        System.out.println("CUSTOMER_DB_URL = " + customerDbUrl);
         if (partnerDbUrl != null) {
-            System.out.println("   PARTNER_DB_URL  = " + partnerDbUrl);
+            System.out.println("PARTNER_DB_URL  = " + partnerDbUrl);
         }
     }
 
-    // ===== Lazy Init Getters =====
+    // ===== Lazy Init =====
     public DataSource getCustomerDataSource() {
         if (customerDataSource == null) {
             synchronized (this) {
@@ -67,7 +67,7 @@ public final class DbConfig {
         if (partnerDataSource == null) {
             synchronized (this) {
                 if (partnerDataSource == null) {
-                    System.out.println("🔌 Initializing PARTNER DB pool");
+                    System.out.println("Initializing PARTNER DB pool");
                     partnerDataSource = createDataSource(partnerDbUrl);
                 }
             }
@@ -77,6 +77,7 @@ public final class DbConfig {
 
     // ===== Hikari Setup =====
     private HikariDataSource createDataSource(String jdbcUrl) {
+
         HikariConfig config = new HikariConfig();
 
         config.setJdbcUrl(jdbcUrl);
@@ -84,14 +85,20 @@ public final class DbConfig {
         config.setPassword(password);
         config.setDriverClassName("org.postgresql.Driver");
 
-        // ---- Render / Free-tier SAFE settings ----
+        // ===== IMPORTANT FIX =====
+        // Disable PostgreSQL server-side prepared statements
+        config.addDataSourceProperty("prepareThreshold", "0");
+
+        // ===== Pool Settings (Render Safe) =====
         config.setMaximumPoolSize(3);
         config.setMinimumIdle(1);
         config.setConnectionTimeout(30000);
         config.setIdleTimeout(600000);
         config.setMaxLifetime(1800000);
 
-        // Fail fast instead of hanging forever
+        // Detect connection leaks (optional but useful)
+        config.setLeakDetectionThreshold(30000);
+
         config.setInitializationFailTimeout(10000);
 
         return new HikariDataSource(config);
@@ -99,11 +106,12 @@ public final class DbConfig {
 
     // ===== JDBC URL NORMALIZER =====
     private String normalizeJdbcUrl(String url) {
+
         if (url == null || url.isBlank()) {
             throw new IllegalStateException("JDBC URL is missing");
         }
 
-        // Enforce sslmode=require for Render Postgres
+        // Ensure sslmode=require (Render requirement)
         if (!url.contains("sslmode=")) {
             if (url.contains("?")) {
                 url = url + "&sslmode=require";
@@ -119,7 +127,7 @@ public final class DbConfig {
     private String getEnv(String key) {
         String value = System.getenv(key);
         if (value == null || value.isBlank()) {
-            throw new IllegalStateException("❌ Missing env var: " + key);
+            throw new IllegalStateException("Missing env var: " + key);
         }
         return value.trim();
     }
