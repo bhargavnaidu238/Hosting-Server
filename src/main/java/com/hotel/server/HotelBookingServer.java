@@ -2,67 +2,59 @@ package com.hotel.server;
 
 import java.net.InetSocketAddress;
 import java.sql.Connection;
-import com.hotel.app.AppFilterHandler;
-import com.hotel.app.BookingHandler;
-import com.hotel.app.BookingHistoryHandler;
-import com.hotel.app.HomePageHandler;
-import com.hotel.app.HotelsHandler;
-import com.hotel.app.LoginHandler;
-import com.hotel.app.PaymentHandler;
-import com.hotel.app.PgsHandler;
-import com.hotel.app.ProfileHandler;
-import com.hotel.app.RegisterHandler;
-import com.hotel.app.RewardsWalletHandler;
+import java.util.concurrent.Executors;
+
+import com.hotel.app.*;
 import com.hotel.utilities.DbConfig;
-import com.hotel.web.finance.GetPartnerFinanceHandler;
-import com.hotel.web.finance.GetPartnerTransactionsHandler;
-import com.hotel.web.finance.RequestPayoutHandler;
-import com.hotel.web.finance.SetFinanceNotificationViewedHandler;
-import com.hotel.web.finance.UpdateBankDetailsHandler;
-import com.hotel.web.partner.AddHotelsHandler;
-import com.hotel.web.partner.AddPgHandler;
-import com.hotel.web.partner.HotelImagesHandler;
-import com.hotel.web.partner.WebBookingHandler;
-import com.hotel.web.partner.WebDashBoardHandler;
-import com.hotel.web.partner.WebLoginRegisterHandler;
-import com.hotel.web.partner.WebProfileHandler;
-import com.hotel.web.partner.WebViewHotelsHandler;
-import com.hotel.web.partner.WebViewPGsHandler;
+import com.hotel.web.finance.*;
+import com.hotel.web.partner.*;
 import com.sun.net.httpserver.HttpServer;
 
 public class HotelBookingServer {
-    public static void main(String[] args) throws Exception {
-    	 int port = Integer.parseInt(
-    	            System.getenv().getOrDefault("PORT", "10000")
-    	    );
 
-        HttpServer server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
-        System.out.println("Server started on port: " + port);
-        
-        // ===== Load DB config once at startup =====
+    public static void main(String[] args) throws Exception {
+
+        // ✅ Render dynamic port
+        int port = Integer.parseInt(
+                System.getenv().getOrDefault("PORT", "10000")
+        );
+
+        HttpServer server = HttpServer.create(
+                new InetSocketAddress("0.0.0.0", port),
+                0
+        );
+
+        System.out.println("🚀 Server starting on port: " + port);
+
+        // ===== Initialize DB Config =====
         DbConfig dbConfig = new DbConfig();
-        
+
+        // ✅ Validate DB connections safely
         try (
                 Connection customerConn = dbConfig.getCustomerDataSource().getConnection();
                 Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()
-            ) {
-                System.out.println("Database connections validated successfully");
-            }
-        
+        ) {
+            System.out.println("✅ Database connections validated successfully");
+        } catch (Exception e) {
+            System.err.println("❌ Database connection failed!");
+            e.printStackTrace();
+            System.exit(1);
+        }
+
+        // ===== Basic Health Endpoints =====
         server.createContext("/", exchange -> {
             String response = "Hotel Backend is running";
-            exchange.sendResponseHeaders(200, response.length());
-            exchange.getResponseBody().write(response.getBytes());
-            exchange.close();
-        });
-        
-        server.createContext("/health", exchange -> {
-            String response = "OK";
-            exchange.sendResponseHeaders(200, response.length());
+            exchange.sendResponseHeaders(200, response.getBytes().length);
             exchange.getResponseBody().write(response.getBytes());
             exchange.close();
         });
 
+        server.createContext("/health", exchange -> {
+            String response = "OK";
+            exchange.sendResponseHeaders(200, response.getBytes().length);
+            exchange.getResponseBody().write(response.getBytes());
+            exchange.close();
+        });
 
         // ========== MOBILE / APP HANDLERS ==========
         server.createContext("/login", new LoginHandler(dbConfig));
@@ -79,9 +71,8 @@ public class HotelBookingServer {
         server.createContext("/cancel-booking", new BookingHistoryHandler(dbConfig));
         server.createContext("/update-booking-dates", new BookingHistoryHandler(dbConfig));
         server.createContext("/filterHotels", new AppFilterHandler(dbConfig));
-        
-        // ============= App Payment & Wallets Section ===============
-        
+
+        // ========== WALLET & PAYMENTS ==========
         server.createContext("/wallet", new RewardsWalletHandler(dbConfig));
         server.createContext("/wallet/deposit", new RewardsWalletHandler(dbConfig));
         server.createContext("/wallet/pay", new RewardsWalletHandler(dbConfig));
@@ -92,11 +83,11 @@ public class HotelBookingServer {
         server.createContext("/razorpay/webhook", new PaymentHandler(dbConfig));
         server.createContext("/payment/refund", new PaymentHandler(dbConfig));
 
-        // ========== WEB HANDLERS ==========
+        // ========== WEB ==========
         server.createContext("/weblogin", new WebLoginRegisterHandler(dbConfig));
         server.createContext("/registerlogin", new WebLoginRegisterHandler(dbConfig));
         server.createContext("/forgotpassword", new WebLoginRegisterHandler(dbConfig));
-        
+
         server.createContext("/api/partner", new WebDashBoardHandler(dbConfig));
 
         server.createContext("/webgetprofile", new WebProfileHandler(dbConfig));
@@ -108,7 +99,7 @@ public class HotelBookingServer {
         server.createContext("/hotel_images", new HotelImagesHandler(dbConfig));
         server.createContext("/webaddpgs", new AddPgHandler(dbConfig));
 
-        server.createContext("/webviewhotels", new WebViewHotelsHandler(dbConfig)); 
+        server.createContext("/webviewhotels", new WebViewHotelsHandler(dbConfig));
         server.createContext("/webviewpgs", new WebViewPGsHandler(dbConfig));
 
         server.createContext("/webgetPartnerBookings", new WebBookingHandler(dbConfig));
@@ -116,32 +107,24 @@ public class HotelBookingServer {
         server.createContext("/webupdateBookingStatus", new WebBookingHandler(dbConfig));
         server.createContext("/setNotificationViewed", new SetFinanceNotificationViewedHandler(dbConfig));
 
-
-
-        // ========== CUSTOMIZATION ==========
-        server.createContext("/customize", new ProfileHandler(dbConfig));
-
-        // ========== PARTNER FINANCE HANDLERS ==========
+        // ========== PARTNER FINANCE ==========
         server.createContext("/getPartnerFinance", new GetPartnerFinanceHandler(dbConfig));
         server.createContext("/updateBankDetails", new UpdateBankDetailsHandler(dbConfig));
         server.createContext("/requestPayout", new RequestPayoutHandler(dbConfig));
         server.createContext("/getPartnerTransactions", new GetPartnerTransactionsHandler(dbConfig));
-        
 
-        // ======== START SERVER ========
-        server.setExecutor(null); // default executor
-        
+        // ✅ Use proper thread pool instead of default
+        server.setExecutor(Executors.newFixedThreadPool(20));
+
+        // ===== Graceful Shutdown =====
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("🛑 Shutting down server...");
             dbConfig.close();
-            server.stop(0);
+            server.stop(1);
         }));
-        
+
         server.start();
-        Thread.currentThread().join();
 
         System.out.println("✅ Server started successfully on port " + port);
-        System.out.println("Available endpoints:");
-
     }
 }
