@@ -85,7 +85,7 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean hotelExists(String hotelId) {
-        String sql = "SELECT COUNT(*) FROM Hotels_info WHERE Hotel_ID = ?";
+        String sql = "SELECT COUNT(*) FROM hotels_info WHERE hotel_id = ?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, hotelId);
@@ -98,9 +98,9 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean addHotelToDB(String hotelId, Map<String, String> params) throws SQLException {
-        String sql = "INSERT INTO Hotels_info (" +
-                "Hotel_ID, Partner_ID, Hotel_Name, Hotel_Type, Room_Type, Address, City, State, Country, Pincode," +
-                "Hotel_Location, Total_Rooms, Available_Rooms, Room_Price, Amenities, Description, Policies, Rating, " +
+        String sql = "INSERT INTO hotels_info (" +
+                "hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode," +
+                "hotel_location, total_rooms, available_rooms, room_price, amenities, description, policies, rating, " +
                 "Hotel_Contact, About_This_Property, Hotel_Images, Customization, Status)" +
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
@@ -112,16 +112,16 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean updateHotelInDB(String hotelId, Map<String, String> params) throws SQLException {
-        String sql = "UPDATE Hotels_info SET " +
-                "Hotel_Name=?, Hotel_Type=?, Room_Type=?, Address=?, City=?, State=?, Country=?, Pincode=?," +
-                "Hotel_Location=?, Total_Rooms=?, Available_Rooms=?, Room_Price=?, Amenities=?, Description=?, Policies=?," +
-                "Rating=?, Hotel_Contact=?, About_This_Property=?, Hotel_Images=?, Customization=?, Status=? " +
-                "WHERE Hotel_ID=?";
+        String sql = "UPDATE hotels_info SET " +
+                "hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?," +
+                "hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, description=?, policies=?," +
+                "rating=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? " +
+                "WHERE hotel_id=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParamsForUpdate(stmt, params);
-            stmt.setString(22, hotelId); // corrected index
+            stmt.setString(22, hotelId); 
             return stmt.executeUpdate() > 0;
         }
     }
@@ -148,7 +148,7 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setString(19, params.getOrDefault("hotel_contact", ""));
         stmt.setString(20, params.getOrDefault("about_this_property", ""));
         stmt.setString(21, params.getOrDefault("hotel_images", null));
-        stmt.setString(22, params.getOrDefault("customization", "NO"));
+        stmt.setString(22, params.getOrDefault("customization", "No"));
         stmt.setString(23, params.getOrDefault("status", "Active"));
     }
 

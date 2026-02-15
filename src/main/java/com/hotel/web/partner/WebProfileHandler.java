@@ -185,7 +185,7 @@ public class WebProfileHandler implements HttpHandler {
             String newHashedPassword = PasswordUtil.hashPassword(newPassword);
 
             // 4️⃣ Update DB with hashed password
-            String updateQuery = "UPDATE partner_data SET Password=? WHERE LOWER(email)=?";
+            String updateQuery = "UPDATE partner_data SET password=? WHERE LOWER(email)=?";
             try (PreparedStatement stmt = conn.prepareStatement(updateQuery)) {
                 stmt.setString(1, newHashedPassword);
                 stmt.setString(2, loggedInEmail);

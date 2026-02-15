@@ -102,14 +102,14 @@ public class WebBookingHandler implements HttpHandler {
         List<Map<String, String>> bookings = new ArrayList<>();
 
         String sql = """
-                SELECT Partner_ID, Hotel_ID, Booking_ID, Hotel_Name, Hotel_Type, Guest_Name,
-                       Email, User_ID, Check_In_Date, Check_Out_Date, Guest_Count, Adults,
-                       Children, Total_Rooms_Booked, Total_Days_at_Stay, Room_Price_Per_Day,
-                       All_Days_Price, GST, Original_Amount, Payment_Method_Type,
-                       Hotel_Address, Booking_Status, Hotel_Contact, Payment_Status,
-                       Wallet_Used, Wallet_Amount_Deducted, Coupon_Code
+                SELECT partner_id, hotel_id, booking_id, hotel_name, hotel_type, guest_name,
+                       email, user_id, check_in_date, check_out_date, guest_count, adults,
+                       children, total_rooms_booked, total_days_at_stay, room_price_per_day,
+                       all_days_price, gst, original_amount, payment_method_type,
+                       hotel_address, booking_status, hotel_contact, payment_status,
+                       wallet_used, wallet_amount_deducted, coupon_code
                 FROM bookings_info
-                WHERE Partner_ID = ?
+                WHERE partner_id = ?
                 """;
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
@@ -159,7 +159,7 @@ public class WebBookingHandler implements HttpHandler {
         boolean success = false;
 
         if (!bookingId.isEmpty()) {
-            String sql = "UPDATE bookings_info SET Booking_Status = 'CANCELLED' WHERE Booking_ID = ?";
+            String sql = "UPDATE bookings_info SET booking_status = 'CANCELLED' WHERE booking_id = ?";
 
             try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
                  PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -205,8 +205,8 @@ public class WebBookingHandler implements HttpHandler {
 
         if (!bookingId.isEmpty() && !newStatus.isEmpty()) {
 
-            String fetchSql = "SELECT Booking_Status, Check_Out_Date FROM bookings_info WHERE Booking_ID = ?";
-            String updateSql = "UPDATE bookings_info SET Booking_Status = ? WHERE Booking_ID = ?";
+            String fetchSql = "SELECT booking_status, check_out_date FROM bookings_info WHERE booking_id = ?";
+            String updateSql = "UPDATE bookings_info SET booking_status = ? WHERE booking_id = ?";
 
             try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
                  PreparedStatement fetchStmt = conn.prepareStatement(fetchSql)) {
@@ -218,8 +218,8 @@ public class WebBookingHandler implements HttpHandler {
 
                 try (ResultSet rs = fetchStmt.executeQuery()) {
                     if (rs.next()) {
-                        currentStatus = rs.getString("Booking_Status").toUpperCase();
-                        String checkOut = rs.getString("Check_Out_Date");
+                        currentStatus = rs.getString("booking_status").toUpperCase();
+                        String checkOut = rs.getString("check_out_date");
                         if (checkOut != null && !checkOut.isEmpty()) {
                             checkOutDate = LocalDate.parse(checkOut);
                         }
