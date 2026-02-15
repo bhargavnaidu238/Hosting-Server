@@ -19,6 +19,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
         this.dbConfig = dbConfig;
     }
 
+    //Updated the Status to user_status
     @Override
     public void handle(HttpExchange exchange) throws IOException {
 
