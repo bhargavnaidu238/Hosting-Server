@@ -108,7 +108,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                 }
 
                 String storedHash = rs.getString("Password");
-                String status = rs.getString("Status");
+                String status = rs.getString("user_status");
 
                 if (!PasswordUtil.verifyPassword(rawPassword, storedHash)) {
                     sendResponse(exchange, 401,
@@ -240,7 +240,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
             String insertQuery =
                     "INSERT INTO partner_data " +
                             "(Partner_ID, Partner_Name, Business_Name, Email, Password, Contact_Number, " +
-                            "Address, City, State, Country, Pincode, GST_Number, Registration_Date, Status) " +
+                            "Address, City, State, Country, Pincode, GST_Number, Registration_Date, user_status) " +
                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
             try (PreparedStatement insertStmt = conn.prepareStatement(insertQuery)) {
