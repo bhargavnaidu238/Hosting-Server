@@ -14,6 +14,7 @@ import java.util.*;
 public class WebDashBoardHandler implements HttpHandler {
 
     private final DbConfig dbConfig;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public WebDashBoardHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
@@ -21,7 +22,6 @@ public class WebDashBoardHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-
         setCORS(exchange);
 
         if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
@@ -37,9 +37,7 @@ public class WebDashBoardHandler implements HttpHandler {
         String path = exchange.getRequestURI().getPath();
         String[] parts = path.split("/");
 
-        // Safe partnerId extraction
         String partnerId = null;
-
         for (int i = 0; i < parts.length; i++) {
             if (parts[i].equalsIgnoreCase("partner") && i + 1 < parts.length) {
                 partnerId = parts[i + 1];
@@ -47,7 +45,7 @@ public class WebDashBoardHandler implements HttpHandler {
             }
         }
 
-        if (partnerId == null || partnerId.isEmpty()) {
+        if (partnerId == null || partnerId.trim().isEmpty()) {
             sendResponse(exchange, 400, "Missing partnerId");
             return;
         }
@@ -61,10 +59,7 @@ public class WebDashBoardHandler implements HttpHandler {
         }
     }
 
-    // ======================= BUILD RESPONSE =======================
-
     private Map<String, Object> buildDashboardData(String partnerId) throws Exception {
-
         Map<String, Object> map = new LinkedHashMap<>();
 
         BookingData b = getBookingStats(partnerId);
@@ -83,37 +78,26 @@ public class WebDashBoardHandler implements HttpHandler {
         map.put("paidPayout", f.paidPayout);
         map.put("payoutStatus", payoutStatus);
 
-        // Booking Notification
         map.put("pendingNotifications", b.pending > 0 ? 1 : 0);
 
-        // Finance Notification
-        boolean showFinanceNotification =
-                payoutStatus != null &&
-                (payoutStatus.equalsIgnoreCase("Success") ||
-                 payoutStatus.equalsIgnoreCase("Failed"));
+        boolean showFinanceNotification = payoutStatus != null &&
+                (payoutStatus.equalsIgnoreCase("Success") || payoutStatus.equalsIgnoreCase("Failed"));
 
         map.put("financeNotifications", showFinanceNotification ? 1 : 0);
-
-        // ✅ FIXED Date Handling
-        map.put("lastUpdated",
-                LocalDateTime.now()
-                        .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        map.put("lastUpdated", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
 
         return map;
     }
 
-    // ======================= BOOKING STATS =======================
-
     private BookingData getBookingStats(String partnerId) throws Exception {
-
-        String sql =
-                """
+        // Using COALESCE to ensure 0 is returned instead of NULL for new partners
+        String sql = """
                 SELECT
                     COUNT(*) AS total,
-                    SUM(CASE WHEN Booking_Status='PENDING'   THEN 1 ELSE 0 END) AS pending,
-                    SUM(CASE WHEN Booking_Status='CONFIRMED' THEN 1 ELSE 0 END) AS confirmed,
-                    SUM(CASE WHEN Booking_Status='COMPLETED' THEN 1 ELSE 0 END) AS completed,
-                    SUM(CASE WHEN Booking_Status='CANCELLED' THEN 1 ELSE 0 END) AS cancelled
+                    COALESCE(SUM(CASE WHEN UPPER(Booking_Status)='PENDING'   THEN 1 ELSE 0 END), 0) AS pending,
+                    COALESCE(SUM(CASE WHEN UPPER(Booking_Status)='CONFIRMED' THEN 1 ELSE 0 END), 0) AS confirmed,
+                    COALESCE(SUM(CASE WHEN UPPER(Booking_Status)='COMPLETED' THEN 1 ELSE 0 END), 0) AS completed,
+                    COALESCE(SUM(CASE WHEN UPPER(Booking_Status)='CANCELLED' THEN 1 ELSE 0 END), 0) AS cancelled
                 FROM bookings_info
                 WHERE partner_id = ?
                 """;
@@ -136,16 +120,8 @@ public class WebDashBoardHandler implements HttpHandler {
         }
     }
 
-    // ======================= FINANCE STATS =======================
-
     private FinanceData getFinanceStats(String partnerId) throws Exception {
-
-        String sql =
-                """
-                SELECT total_revenue, net_revenue, pending_payout, paid_payout
-                FROM partner_finance
-                WHERE partner_id = ?
-                """;
+        String sql = "SELECT total_revenue, net_revenue, pending_payout, paid_payout FROM partner_finance WHERE partner_id = ?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -164,53 +140,31 @@ public class WebDashBoardHandler implements HttpHandler {
         }
     }
 
-    // ======================= GET LATEST PAYOUT STATUS =======================
-
     private String getLatestPayoutStatus(String partnerId) throws Exception {
-
-        String sql =
-                """
-                SELECT status
-                FROM partner_transactions
-                WHERE partner_id = ?
-                AND transaction_type = 'PAYOUT'
-                ORDER BY transaction_date DESC
-                LIMIT 1
+        String sql = """
+                SELECT status FROM partner_transactions
+                WHERE partner_id = ? AND transaction_type = 'PAYOUT'
+                ORDER BY transaction_date DESC LIMIT 1
                 """;
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
-
             stmt.setString(1, partnerId);
             ResultSet rs = stmt.executeQuery();
-
-            if (rs.next()) {
-                return rs.getString("status");
-            }
+            return rs.next() ? rs.getString("status") : null;
         }
-        return null;
     }
 
     static class BookingData {
-        int total;
-        int pending;
-        int confirmed;
-        int cancelled;
-        int completed;
+        int total, pending, confirmed, cancelled, completed;
     }
 
     static class FinanceData {
-        double totalRevenue;
-        double netRevenue;
-        double pendingPayout;
-        double paidPayout;
+        double totalRevenue = 0.0, netRevenue = 0.0, pendingPayout = 0.0, paidPayout = 0.0;
     }
 
     private void sendJson(HttpExchange ex, Object obj) throws IOException {
-
-        String json = new ObjectMapper().writeValueAsString(obj);
-        byte[] out  = json.getBytes();
-
+        byte[] out = objectMapper.writeValueAsBytes(obj);
         ex.getResponseHeaders().add("Content-Type", "application/json; charset=UTF-8");
         ex.sendResponseHeaders(200, out.length);
         ex.getResponseBody().write(out);
@@ -218,7 +172,6 @@ public class WebDashBoardHandler implements HttpHandler {
     }
 
     private void sendResponse(HttpExchange ex, int code, String msg) throws IOException {
-
         byte[] out = msg.getBytes();
         ex.sendResponseHeaders(code, out.length);
         ex.getResponseBody().write(out);
