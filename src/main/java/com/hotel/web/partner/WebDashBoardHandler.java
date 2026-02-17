@@ -4,14 +4,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hotel.utilities.DbConfig;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+
 import java.io.IOException;
 import java.sql.*;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.Date;
 
 public class WebDashBoardHandler implements HttpHandler {
 
-	private final DbConfig dbConfig;
+    private final DbConfig dbConfig;
 
     public WebDashBoardHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
@@ -35,7 +37,15 @@ public class WebDashBoardHandler implements HttpHandler {
         String path = exchange.getRequestURI().getPath();
         String[] parts = path.split("/");
 
-        String partnerId = (parts.length >= 4) ? parts[3] : null;
+        // Safe partnerId extraction
+        String partnerId = null;
+
+        for (int i = 0; i < parts.length; i++) {
+            if (parts[i].equalsIgnoreCase("partner") && i + 1 < parts.length) {
+                partnerId = parts[i + 1];
+                break;
+            }
+        }
 
         if (partnerId == null || partnerId.isEmpty()) {
             sendResponse(exchange, 400, "Missing partnerId");
@@ -54,6 +64,7 @@ public class WebDashBoardHandler implements HttpHandler {
     // ======================= BUILD RESPONSE =======================
 
     private Map<String, Object> buildDashboardData(String partnerId) throws Exception {
+
         Map<String, Object> map = new LinkedHashMap<>();
 
         BookingData b = getBookingStats(partnerId);
@@ -75,7 +86,7 @@ public class WebDashBoardHandler implements HttpHandler {
         // Booking Notification
         map.put("pendingNotifications", b.pending > 0 ? 1 : 0);
 
-        // Finance Notification → ONLY for Success or Failed
+        // Finance Notification
         boolean showFinanceNotification =
                 payoutStatus != null &&
                 (payoutStatus.equalsIgnoreCase("Success") ||
@@ -83,7 +94,10 @@ public class WebDashBoardHandler implements HttpHandler {
 
         map.put("financeNotifications", showFinanceNotification ? 1 : 0);
 
-        map.put("lastUpdated", new Date().toString());
+        // ✅ FIXED Date Handling
+        map.put("lastUpdated",
+                LocalDateTime.now()
+                        .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
 
         return map;
     }
@@ -96,10 +110,10 @@ public class WebDashBoardHandler implements HttpHandler {
                 """
                 SELECT
                     COUNT(*) AS total,
-                    SUM(CASE WHEN Booking_Status='PENDING'    THEN 1 ELSE 0 END) AS pending,
-                    SUM(CASE WHEN Booking_Status='CONFIRMED'  THEN 1 ELSE 0 END) AS confirmed,
-                    SUM(CASE WHEN Booking_Status='COMPLETED'  THEN 1 ELSE 0 END) AS completed,
-                    SUM(CASE WHEN Booking_Status='CANCELLED'  THEN 1 ELSE 0 END) AS cancelled
+                    SUM(CASE WHEN Booking_Status='PENDING'   THEN 1 ELSE 0 END) AS pending,
+                    SUM(CASE WHEN Booking_Status='CONFIRMED' THEN 1 ELSE 0 END) AS confirmed,
+                    SUM(CASE WHEN Booking_Status='COMPLETED' THEN 1 ELSE 0 END) AS completed,
+                    SUM(CASE WHEN Booking_Status='CANCELLED' THEN 1 ELSE 0 END) AS cancelled
                 FROM bookings_info
                 WHERE partner_id = ?
                 """;
@@ -125,6 +139,7 @@ public class WebDashBoardHandler implements HttpHandler {
     // ======================= FINANCE STATS =======================
 
     private FinanceData getFinanceStats(String partnerId) throws Exception {
+
         String sql =
                 """
                 SELECT total_revenue, net_revenue, pending_payout, paid_payout
@@ -148,7 +163,7 @@ public class WebDashBoardHandler implements HttpHandler {
             return f;
         }
     }
-    
+
     // ======================= GET LATEST PAYOUT STATUS =======================
 
     private String getLatestPayoutStatus(String partnerId) throws Exception {
@@ -170,13 +185,11 @@ public class WebDashBoardHandler implements HttpHandler {
             ResultSet rs = stmt.executeQuery();
 
             if (rs.next()) {
-                return rs.getString("status");  // Pending, Requested, Success, Failed
+                return rs.getString("status");
             }
         }
         return null;
     }
-
-    // ======================= DATA MODELS =======================
 
     static class BookingData {
         int total;
@@ -193,9 +206,8 @@ public class WebDashBoardHandler implements HttpHandler {
         double paidPayout;
     }
 
-    // ======================= RESPONSE HELPERS =======================
-
     private void sendJson(HttpExchange ex, Object obj) throws IOException {
+
         String json = new ObjectMapper().writeValueAsString(obj);
         byte[] out  = json.getBytes();
 
@@ -206,6 +218,7 @@ public class WebDashBoardHandler implements HttpHandler {
     }
 
     private void sendResponse(HttpExchange ex, int code, String msg) throws IOException {
+
         byte[] out = msg.getBytes();
         ex.sendResponseHeaders(code, out.length);
         ex.getResponseBody().write(out);
