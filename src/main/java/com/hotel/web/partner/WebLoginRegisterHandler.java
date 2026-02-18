@@ -125,19 +125,21 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
                 String partnerId = rs.getString("partner_id");
                 String partnerEmail = rs.getString("email");
+                String partnerName = rs.getString("partner_name");
+                String businessName = rs.getString("business_name");
 
-                // ✅ SUCCESS RESPONSE (Flutter compatible)
                 StringBuilder sb = new StringBuilder();
                 sb.append("{");
                 sb.append("\"status\":\"success\",");
                 sb.append("\"message\":\"Login successful\",");
-                sb.append("\"Partner_ID\":\"").append(partnerId).append("\",");
-                sb.append("\"Email\":\"").append(partnerEmail).append("\",");
                 sb.append("\"partner_id\":\"").append(partnerId).append("\",");
-                sb.append("\"email\":\"").append(partnerEmail).append("\"");
+                sb.append("\"email\":\"").append(partnerEmail).append("\",");
+                sb.append("\"partner_name\":\"").append(partnerName).append("\",");
+                sb.append("\"business_name\":\"").append(businessName).append("\"");
                 sb.append("}");
 
                 sendResponse(exchange, 200, sb.toString());
+
             }
         }
     }
