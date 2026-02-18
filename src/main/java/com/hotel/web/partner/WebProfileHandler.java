@@ -13,7 +13,6 @@ import java.util.*;
 
 public class WebProfileHandler implements HttpHandler {
 
-    // Correct for your schema
     private static final Set<String> READ_ONLY_FIELDS =
             Set.of("email", "user_status", "registration_date", "partner_id");
 
@@ -65,7 +64,7 @@ public class WebProfileHandler implements HttpHandler {
         } catch (Exception e) {
             e.printStackTrace();
             sendJson(exchange, 500,
-                    Map.of("status", "error", "message", e.getMessage()));
+                    Map.of("status", "error", "message", "Internal server error"));
         }
     }
 
@@ -75,13 +74,12 @@ public class WebProfileHandler implements HttpHandler {
                                   Map<String, String> params)
             throws Exception {
 
-        String loggedInEmail =
-                params.getOrDefault("loggedInEmail", "").trim().toLowerCase();
+        String email = params.getOrDefault("email", "").trim().toLowerCase();
 
-        if (loggedInEmail.isEmpty()) {
+        if (email.isEmpty()) {
             sendJson(exchange, 400,
                     Map.of("status", "error",
-                           "message", "Logged-in email is required"));
+                           "message", "Email is required"));
             return;
         }
 
@@ -90,7 +88,7 @@ public class WebProfileHandler implements HttpHandler {
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(query)) {
 
-            stmt.setString(1, loggedInEmail);
+            stmt.setString(1, email);
 
             try (ResultSet rs = stmt.executeQuery()) {
 
@@ -122,39 +120,24 @@ public class WebProfileHandler implements HttpHandler {
                                      Map<String, String> params)
             throws Exception {
 
-        String loggedInEmail =
-                params.getOrDefault("loggedInEmail", "").trim().toLowerCase();
+        String email = params.getOrDefault("email", "").trim().toLowerCase();
 
-        if (loggedInEmail.isEmpty()) {
+        if (email.isEmpty()) {
             sendJson(exchange, 400,
                     Map.of("status", "error",
-                           "message", "Logged-in email is required"));
+                           "message", "Email is required"));
             return;
-        }
-
-        List<String> columns = new ArrayList<>();
-
-        try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
-             PreparedStatement stmt =
-                     conn.prepareStatement("SELECT * FROM partner_data LIMIT 1");
-             ResultSet rs = stmt.executeQuery()) {
-
-            ResultSetMetaData meta = rs.getMetaData();
-
-            for (int i = 1; i <= meta.getColumnCount(); i++) {
-                columns.add(meta.getColumnName(i).toLowerCase());
-            }
         }
 
         StringBuilder setClause = new StringBuilder();
         List<String> values = new ArrayList<>();
 
-        for (String col : columns) {
-            if (params.containsKey(col)
-                    && !READ_ONLY_FIELDS.contains(col)) {
+        for (Map.Entry<String, String> entry : params.entrySet()) {
+            String col = entry.getKey().toLowerCase();
 
+            if (!READ_ONLY_FIELDS.contains(col)) {
                 setClause.append(col).append("=?,");
-                values.add(params.get(col).trim());
+                values.add(entry.getValue().trim());
             }
         }
 
@@ -182,7 +165,7 @@ public class WebProfileHandler implements HttpHandler {
                 stmt.setString(index++, val);
             }
 
-            stmt.setString(index, loggedInEmail);
+            stmt.setString(index, email);
 
             int updated = stmt.executeUpdate();
 
@@ -204,14 +187,11 @@ public class WebProfileHandler implements HttpHandler {
                                       Map<String, String> params)
             throws Exception {
 
-        String loggedInEmail =
-                params.getOrDefault("loggedInEmail", "").trim().toLowerCase();
-        String currentPassword =
-                params.getOrDefault("currentPassword", "");
-        String newPassword =
-                params.getOrDefault("newPassword", "");
+        String email = params.getOrDefault("email", "").trim().toLowerCase();
+        String currentPassword = params.getOrDefault("currentPassword", "");
+        String newPassword = params.getOrDefault("newPassword", "");
 
-        if (loggedInEmail.isEmpty()
+        if (email.isEmpty()
                 || currentPassword.isEmpty()
                 || newPassword.isEmpty()) {
 
@@ -230,7 +210,7 @@ public class WebProfileHandler implements HttpHandler {
                          conn.prepareStatement(
                                  "SELECT password FROM partner_data WHERE LOWER(email)=?")) {
 
-                stmt.setString(1, loggedInEmail);
+                stmt.setString(1, email);
 
                 try (ResultSet rs = stmt.executeQuery()) {
                     if (!rs.next()) {
@@ -257,7 +237,7 @@ public class WebProfileHandler implements HttpHandler {
                                  "UPDATE partner_data SET password=? WHERE LOWER(email)=?")) {
 
                 stmt.setString(1, newHash);
-                stmt.setString(2, loggedInEmail);
+                stmt.setString(2, email);
                 stmt.executeUpdate();
             }
         }
@@ -273,13 +253,12 @@ public class WebProfileHandler implements HttpHandler {
                                      Map<String, String> params)
             throws Exception {
 
-        String loggedInEmail =
-                params.getOrDefault("loggedInEmail", "").trim().toLowerCase();
+        String email = params.getOrDefault("email", "").trim().toLowerCase();
 
-        if (loggedInEmail.isEmpty()) {
+        if (email.isEmpty()) {
             sendJson(exchange, 400,
                     Map.of("status", "error",
-                           "message", "Logged-in email required"));
+                           "message", "Email required"));
             return;
         }
 
@@ -291,7 +270,7 @@ public class WebProfileHandler implements HttpHandler {
              PreparedStatement stmt =
                      conn.prepareStatement(updateQuery)) {
 
-            stmt.setString(1, loggedInEmail);
+            stmt.setString(1, email);
             int updated = stmt.executeUpdate();
 
             if (updated == 0) {
@@ -314,8 +293,7 @@ public class WebProfileHandler implements HttpHandler {
                           int statusCode,
                           Object response) throws IOException {
 
-        byte[] bytes =
-                objectMapper.writeValueAsBytes(response);
+        byte[] bytes = objectMapper.writeValueAsBytes(response);
 
         exchange.getResponseHeaders()
                 .set("Content-Type", "application/json; charset=UTF-8");
