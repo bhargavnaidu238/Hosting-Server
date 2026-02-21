@@ -128,7 +128,7 @@ public class AddPgHandler implements HttpHandler {
     // ----------------- DB helpers -----------------
 
     private boolean pgExists(String pgId) {
-        String sql = "SELECT COUNT(*) FROM paying_guest_info WHERE PG_ID = ?";
+        String sql = "SELECT COUNT(*) FROM paying_guest_info WHERE pg_id = ?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement st = conn.prepareStatement(sql)) {
 
@@ -145,16 +145,17 @@ public class AddPgHandler implements HttpHandler {
     private boolean addPGToDB(String pgId, Map<String, String> params) throws SQLException {
         // Insert must match your table columns and order exactly
         String sql = "INSERT INTO paying_guest_info (" +
-                "PG_ID, Partner_ID, PG_Name, PG_Type, Room_Type, Address, City, State, Country, Pincode, " +
-                "Total_Single_Sharing_Rooms, Total_Double_Sharing_Rooms, Total_Three_Sharing_Rooms, " +
-                "Total_Four_ShARING_Rooms, Total_Five_ShARING_Rooms, Hotel_Location, Available_Rooms, Room_Price, " +
-                "Amenities, Description, Policies, Rating, PG_Contact, About_This_PG, PG_Images, Status" +
+                "pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, " +
+                "total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, " +
+                "total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, room_price, " +
+                "amenities, description, policies, rating, pg_contact, about_this_pg, pg_images, status" +
                 ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
+        /*
         // Fix column names that may have been pasted with inconsistent capitalization/spelling:
         sql = sql.replace("Total_Four_ShARING_Rooms", "Total_Four_Sharing_Rooms")
                  .replace("Total_Five_ShARING_Rooms", "Total_Five_Sharing_Rooms");
-
+*/
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
@@ -165,17 +166,17 @@ public class AddPgHandler implements HttpHandler {
 
     private boolean updatePGInDB(String pgId, Map<String, String> params) throws SQLException {
         String sql = "UPDATE paying_guest_info SET " +
-                "PG_Name=?, Partner_ID=?, PG_Type=?, Room_Type=?, Address=?, City=?, State=?, Country=?, Pincode=?, " +
-                "Total_Single_Sharing_Rooms=?, Total_Double_Sharing_Rooms=?, Total_Three_Sharing_Rooms=?, " +
-                "Total_Four_Sharing_Rooms=?, Total_Five_Sharing_Rooms=?, Hotel_Location=?, Available_Rooms=?, Room_Price=?, " +
-                "Amenities=?, Description=?, Policies=?, Rating=?, PG_Contact=?, About_This_PG=?, PG_Images=?, Status=? " +
+                "pg_name=?, partner_id=?, pg_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, " +
+                "total_single_sharing_rooms=?, total_double_sharing_rooms=?, total_three_sharing_rooms=?, " +
+                "total_four_sharing_rooms=?, total_five_sharing_rooms=?, hotel_location=?, available_rooms=?, room_price=?, " +
+                "amenities=?, description=?, policies=?, rating=?, pg_contact=?, about_this_pg=?, pg_images=?, status=? " +
                 "WHERE PG_ID=?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             setPGParamsForUpdate(stmt, params);
-            stmt.setString(26, pgId); // WHERE PG_ID=?
+            stmt.setString(26, pgId); 
             return stmt.executeUpdate() > 0;
         }
     }
@@ -188,7 +189,7 @@ public class AddPgHandler implements HttpHandler {
         stmt.setString(2, params.getOrDefault("partner_id", ""));
         stmt.setString(3, params.getOrDefault("pg_name", ""));
         stmt.setString(4, params.getOrDefault("pg_type", ""));
-        stmt.setString(5, params.getOrDefault("room_type", "")); // CSV like "Single Sharing,Double Sharing"
+        stmt.setString(5, params.getOrDefault("room_type", ""));
         stmt.setString(6, params.getOrDefault("address", ""));
         stmt.setString(7, params.getOrDefault("city", ""));
         stmt.setString(8, params.getOrDefault("state", ""));
@@ -197,7 +198,7 @@ public class AddPgHandler implements HttpHandler {
 
         stmt.setInt(11, parseIntSafe(params.get("total_single_sharing_rooms")));
         stmt.setInt(12, parseIntSafe(params.get("total_double_sharing_rooms")));
-        stmt.setInt(13, parseIntSafe(params.get("total_three_sharing_rooms"))); // fixed key
+        stmt.setInt(13, parseIntSafe(params.get("total_three_sharing_rooms")));
         stmt.setInt(14, parseIntSafe(params.get("total_four_sharing_rooms")));
         stmt.setInt(15, parseIntSafe(params.get("total_five_sharing_rooms")));
 
@@ -211,7 +212,6 @@ public class AddPgHandler implements HttpHandler {
         stmt.setString(21, params.getOrDefault("policies", ""));
         stmt.setDouble(22, parseDoubleSafe(params.get("rating")));
         stmt.setString(23, params.getOrDefault("pg_contact", ""));
-        // Flutter uses 'about_this_property' — table column is About_This_PG
         stmt.setString(24, params.getOrDefault("about_this_property", params.getOrDefault("about_this_pg", "")));
         stmt.setString(25, params.getOrDefault("pg_images", null));
         stmt.setString(26, params.getOrDefault("status", "Active"));
@@ -278,7 +278,6 @@ public class AddPgHandler implements HttpHandler {
         }
     }
 
-    // parse application/x-www-form-urlencoded into a map (keys and values decoded)
     private Map<String, String> parseForm(String body) throws UnsupportedEncodingException {
         Map<String, String> map = new HashMap<>();
         if (body == null || body.isEmpty()) return map;
