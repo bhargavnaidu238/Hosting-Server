@@ -166,7 +166,7 @@ public class GetPartnerFinanceHandler implements HttpHandler {
                        total_days_at_stay, room_price_per_day, all_days_price, gst, original_amount, final_payable_amount,
                        amount_paid_online, due_amount_at_hotel, payment_method_type, paid_via, transaction_id, hotel_address, 
                        booking_status, hotel_contact, payment_status, refund_status, wallet_used, wallet_amount_deducted,
-                       coupon_code, coupon_discount_amount, room_rice_per_month, months
+                       coupon_code, coupon_discount_amount, room_price_per_month, months
                 FROM bookings_info
                 WHERE partner_id = ?
                 ORDER BY check_in_date DESC
