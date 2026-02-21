@@ -9,7 +9,7 @@ import java.util.*;
 
 public class UpdateBankDetailsHandler implements HttpHandler {
 
-	private final DbConfig dbConfig;
+    private final DbConfig dbConfig;
 
     public UpdateBankDetailsHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
@@ -17,6 +17,9 @@ public class UpdateBankDetailsHandler implements HttpHandler {
 
     private static final Set<String> VALID_PAYOUT_TYPES =
             Set.of("Daily", "Weekly", "Fornight", "Monthly", "Quarterly");
+
+    private static final Set<String> VALID_ACCOUNT_TYPES =
+            Set.of("Current", "Savings");
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
@@ -52,6 +55,11 @@ public class UpdateBankDetailsHandler implements HttpHandler {
         String panTaxId = params.getOrDefault("PAN_Tax_ID", "");
         String payoutType = params.getOrDefault("Payout_Type", "");
 
+        if (!VALID_ACCOUNT_TYPES.contains(accountType)) {
+            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Invalid account type\"}");
+            return;
+        }
+
         if (!VALID_PAYOUT_TYPES.contains(payoutType)) {
             sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Invalid payout type\"}");
             return;
@@ -59,16 +67,18 @@ public class UpdateBankDetailsHandler implements HttpHandler {
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
 
-            // 🔹 Check unique Account Number
-            if (exists(conn, "SELECT Partner_ID FROM Partner_Finance WHERE Account_Number = ? AND Partner_ID <> ?",
+            // Check unique Account Number
+            if (exists(conn,
+                    "SELECT Partner_ID FROM Partner_Finance WHERE Account_Number = ? AND Partner_ID <> ?",
                     accountNumber, partnerId)) {
                 sendResponse(exchange, 409,
                         "{\"status\":\"error\",\"message\":\"Account Number already registered by another partner\"}");
                 return;
             }
 
-            // 🔹 Check unique PAN number
-            if (exists(conn, "SELECT Partner_ID FROM Partner_Finance WHERE PAN_Tax_ID = ? AND Partner_ID <> ?",
+            // Check unique PAN number
+            if (exists(conn,
+                    "SELECT Partner_ID FROM Partner_Finance WHERE PAN_Tax_ID = ? AND Partner_ID <> ?",
                     panTaxId, partnerId)) {
                 sendResponse(exchange, 409,
                         "{\"status\":\"error\",\"message\":\"PAN / Tax ID already registered by another partner\"}");
@@ -79,6 +89,7 @@ public class UpdateBankDetailsHandler implements HttpHandler {
                     "SELECT Partner_ID FROM Partner_Finance WHERE Partner_ID = ?", partnerId);
 
             if (alreadyExists) {
+
                 String sql = """
                         UPDATE Partner_Finance SET
                         Account_Holder_Name=?, Bank_Name=?, Account_Number=?, IFSC_SWIFT=?,
@@ -87,14 +98,22 @@ public class UpdateBankDetailsHandler implements HttpHandler {
                         """;
 
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
+
                     ps.setString(1, accountHolderName);
                     ps.setString(2, bankName);
                     ps.setString(3, accountNumber);
                     ps.setString(4, ifscSwift);
-                    ps.setString(5, accountType);
+
+                    // 🔥 FIX HERE (ENUM)
+                    ps.setObject(5, accountType, Types.OTHER);
+
                     ps.setString(6, panTaxId);
-                    ps.setString(7, payoutType);
+
+                    // 🔥 FIX HERE (ENUM)
+                    ps.setObject(7, payoutType, Types.OTHER);
+
                     ps.setString(8, partnerId);
+
                     ps.executeUpdate();
                 }
 
@@ -108,14 +127,21 @@ public class UpdateBankDetailsHandler implements HttpHandler {
                         """;
 
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
+
                     ps.setString(1, partnerId);
                     ps.setString(2, accountHolderName);
                     ps.setString(3, bankName);
                     ps.setString(4, accountNumber);
                     ps.setString(5, ifscSwift);
-                    ps.setString(6, accountType);
+
+                    // 🔥 FIX HERE (ENUM)
+                    ps.setObject(6, accountType, Types.OTHER);
+
                     ps.setString(7, panTaxId);
-                    ps.setString(8, payoutType);
+
+                    // 🔥 FIX HERE (ENUM)
+                    ps.setObject(8, payoutType, Types.OTHER);
+
                     ps.executeUpdate();
                 }
             }
