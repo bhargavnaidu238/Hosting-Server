@@ -62,7 +62,7 @@ public class GetPartnerFinanceHandler implements HttpHandler {
             // 2) Commission percentage MUST come from DB (Partner_Finance.Commission_Percentage).
             //    If DB returns NULL treat as 0.0 (do NOT use any other hard-coded fallback).
             double commissionPercent = 0.0;
-            Object cpObj = partnerMap.get("Commission_Percentage");
+            Object cpObj = partnerMap.get("commission_percentage");
             if (cpObj != null) {
                 try { commissionPercent = Double.parseDouble(cpObj.toString()); }
                 catch (Exception ignored) { commissionPercent = 0.0; }
@@ -78,7 +78,7 @@ public class GetPartnerFinanceHandler implements HttpHandler {
             double commissionAmount = recognizedRevenue * commissionPercent / 100.0;
             double netRevenue = recognizedRevenue - commissionAmount;
 
-            double paidPayout = toDouble(partnerMap.getOrDefault("Paid_Payout", 0.0));
+            double paidPayout = toDouble(partnerMap.getOrDefault("paid_payout", 0.0));
             double pendingPayout = Math.max(0.0, netRevenue - paidPayout);
 
             // 5) Build response
@@ -87,31 +87,31 @@ public class GetPartnerFinanceHandler implements HttpHandler {
             result.put("partner_id", partnerId);
 
             // Recognized (authoritative) revenue — COMPLETED only
-            result.put("Total_Revenue", df.format(recognizedRevenue));
+            result.put("total_revenue", df.format(recognizedRevenue));
             // Provisional (informational) revenue — PENDING + CONFIRMED
-            result.put("Provisional_Revenue", df.format(provisionalRevenue));
+            result.put("provisional_revenue", df.format(provisionalRevenue));
 
-            result.put("Commission_Percentage", df.format(commissionPercent));
-            result.put("Commission_Amount", df.format(commissionAmount));
-            result.put("Net_Revenue", df.format(netRevenue));
-            result.put("Pending_Payout", df.format(pendingPayout));
-            result.put("Paid_Payout", df.format(paidPayout));
+            result.put("commission_percentage", df.format(commissionPercent));
+            result.put("commission_amount", df.format(commissionAmount));
+            result.put("net_revenue", df.format(netRevenue));
+            result.put("pending_payout", df.format(pendingPayout));
+            result.put("paid_payout", df.format(paidPayout));
 
             // Counts
-            result.put("Total_Bookings", agg.count);
-            result.put("Completed_Bookings", agg.completed);
-            result.put("Cancelled_Bookings", agg.cancelled);
-            result.put("Provisional_Bookings", agg.provisionalCount);
+            result.put("total_bookings", agg.count);
+            result.put("completed_bookings", agg.completed);
+            result.put("cancelled_bookings", agg.cancelled);
+            result.put("provisional_bookings", agg.provisionalCount);
 
             // Bank details - map DB columns to frontend keys (safe defaults)
-            result.put("Account_Holder_Name", partnerMap.getOrDefault("Account_Holder_Name", ""));
-            result.put("Bank_Name", partnerMap.getOrDefault("Bank_Name", ""));
-            result.put("Account_Number", partnerMap.getOrDefault("Account_Number", ""));
-            result.put("IFSC_SWIFT", partnerMap.getOrDefault("IFSC_SWIFT", ""));
-            result.put("Account_Type", partnerMap.getOrDefault("Account_Type", ""));
-            result.put("PAN_Tax_ID", partnerMap.getOrDefault("PAN_Tax_ID", ""));
-            result.put("Payout_Type", partnerMap.getOrDefault("Payout_Type", ""));
-            result.put("Last_Payout_Date", partnerMap.getOrDefault("Last_Payout_Date", ""));
+            result.put("account_holder_name", partnerMap.getOrDefault("account_holder_name", ""));
+            result.put("bank_name", partnerMap.getOrDefault("bank_name", ""));
+            result.put("account_number", partnerMap.getOrDefault("account_number", ""));
+            result.put("ifsc_swift", partnerMap.getOrDefault("ifsc_swift", ""));
+            result.put("account_type", partnerMap.getOrDefault("account_type", ""));
+            result.put("pan_tax_id", partnerMap.getOrDefault("pan_tax_id", ""));
+            result.put("payout_type", partnerMap.getOrDefault("payout_type", ""));
+            result.put("last_payout_date", partnerMap.getOrDefault("last_payout_date", ""));
 
             // Attach per-booking list (all statuses). Per-booking Commission_Amount/Net_Revenue computed.
             result.put("Bookings", agg.bookings);
@@ -129,12 +129,12 @@ public class GetPartnerFinanceHandler implements HttpHandler {
         Map<String, Object> map = new LinkedHashMap<>();
 
         String sql = """
-                SELECT Partner_ID, Account_Holder_Name, Bank_Name, Account_Number,
-                       IFSC_SWIFT, Account_Type, PAN_Tax_ID, Payout_Type,
-                       Total_Revenue, Commission_Percentage, Net_Revenue,
-                       Pending_Payout, Paid_Payout, Last_Payout_Date
-                FROM Partner_Finance
-                WHERE Partner_ID = ?
+                SELECT partner_id, account_holder_name, bank_name, account_number,
+                       ifsc_swift, account_type, pan_tax_id, payout_type,
+                       total_revenue, commission_percentage, net_revenue,
+                       pending_payout, paid_payout, last_payout_date
+                FROM partner_finance
+                WHERE partner_id = ?
                 """;
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -161,15 +161,15 @@ public class GetPartnerFinanceHandler implements HttpHandler {
 
         // Select relevant columns from bookings_info. Include Total_Price (revenue).
         String sql = """
-                SELECT Booking_ID, Hotel_ID, Hotel_Name, Hotel_Type, Guest_Name, Email, User_ID,
-                       Check_In_Date, Check_Out_Date, Guest_Count, Adults, Children, Total_Rooms_Booked,
-                       Total_Days_at_Stay, Room_Price_Per_Day, All_Days_Price, GST, Original_Amount, Final_Payable_Amount,
-                       Amount_Paid_Online, Due_Amount_At_Hotel, Payment_Method_Type, Paid_Via, Transaction_ID, Hotel_Address, 
-                       Booking_Status, Hotel_Contact, Payment_Status, Refund_Status, Wallet_Used, Wallet_Amount_Deducted,
-                       Coupon_Code, Coupon_Discount_Amount, Room_Price_Per_Month, Months
+                SELECT booking_id, hotel_id, hotel_name, hotel_type, guest_name, email, user_id,
+                       check_in_date, check_out_date, guest_count, adults, children, total_rooms_booked,
+                       total_days_at_stay, room_price_per_day, all_days_price, gst, original_amount, final_payable_amount,
+                       amount_paid_online, due_amount_at_hotel, payment_method_type, paid_via, transaction_id, hotel_address, 
+                       booking_status, hotel_contact, payment_status, refund_status, wallet_used, wallet_amount_deducted,
+                       coupon_code, coupon_discount_amount, room_rice_per_month, months
                 FROM bookings_info
-                WHERE Partner_ID = ?
-                ORDER BY Check_In_Date DESC
+                WHERE partner_id = ?
+                ORDER BY check_in_date DESC
                 """;
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
@@ -185,11 +185,11 @@ public class GetPartnerFinanceHandler implements HttpHandler {
 
                     double totalPrice = 0.0;
                     try {
-                        Object tpObj = rs.getObject("Original_Amount");
+                        Object tpObj = rs.getObject("original_amount");
                         if (tpObj != null) totalPrice = Double.parseDouble(tpObj.toString());
                     } catch (Exception ignored) { totalPrice = 0.0; }
 
-                    String status = rs.getString("Booking_Status");
+                    String status = rs.getString("booking_status");
                     if (status != null) {
                         if (status.equalsIgnoreCase("CANCELLED")) agg.cancelled++;
                         else if (status.equalsIgnoreCase("COMPLETED")) {
@@ -222,8 +222,8 @@ public class GetPartnerFinanceHandler implements HttpHandler {
                     double commissionAmt = totalPrice * commissionPercent / 100.0;
                     double netAmt = totalPrice - commissionAmt;
 
-                    booking.put("Commission_Amount", df.format(commissionAmt));
-                    booking.put("Net_Revenue", df.format(netAmt));
+                    booking.put("commission_amount", df.format(commissionAmt));
+                    booking.put("net_revenue", df.format(netAmt));
 
                     agg.bookings.add(booking);
                 }
