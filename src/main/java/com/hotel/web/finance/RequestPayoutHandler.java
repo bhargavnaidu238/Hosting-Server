@@ -48,7 +48,6 @@ public class RequestPayoutHandler implements HttpHandler {
             requestedAmount = 0;
         }
 
-        /** DEFAULT COMMENT AUTO HANDLING **/
         String comments = params.getOrDefault("comments", "").trim();
         if (comments.isEmpty())
             comments = "User Requested Payment";
@@ -82,7 +81,7 @@ public class RequestPayoutHandler implements HttpHandler {
 
             double commissionPercent = 0;
             String selectSQL =
-                    "SELECT Commission_Percentage, Paid_Payout, Pending_Payout FROM Partner_Finance WHERE Partner_ID=? FOR UPDATE";
+                    "SELECT commission_percentage, paid_payout, pending_payout FROM partner_finance WHERE partner_id=? FOR UPDATE";
 
             try (PreparedStatement ps = finConn.prepareStatement(selectSQL)) {
                 ps.setString(1, partnerId);
@@ -94,7 +93,7 @@ public class RequestPayoutHandler implements HttpHandler {
                     return;
                 }
 
-                commissionPercent = rs.getDouble("Commission_Percentage");
+                commissionPercent = rs.getDouble("commission_percentage");
                 if (commissionPercent <= 0)
                     commissionPercent = FALLBACK_COMMISSION_PERCENT;
             }
@@ -118,18 +117,18 @@ public class RequestPayoutHandler implements HttpHandler {
             }
 
             /**UPDATE FINANCE TABLE — mapping explicitly as you requested:
-                 Pending_Payout = Balance_Amount (from transaction)
-                 Paid_Payout    = Withdrawal_Amount (requestedAmount for THIS transaction)
-                 Also update Total_Revenue, Net_Revenue, Commission_Percentage, Last_Payout_Date **/
+                 pending_payout = balance_amount (from transaction)
+                 paid_payout    = withdrawal_amount (requestedAmount for THIS transaction)
+                 Also update total_revenue, net_revenue, commission_percentage, last_payout_date **/
             String updateFinanceSQL = """
-                    UPDATE Partner_Finance
-                    SET Total_Revenue = ?,
-                        Commission_Percentage = ?,
-                        Net_Revenue = ?,
-                        Pending_Payout = ?,
-                        Paid_Payout = ?,
-                        Last_Payout_Date = ?
-                    WHERE Partner_ID = ?
+                    UPDATE partner_finance
+                    SET total_revenue = ?,
+                        commission_percentage = ?,
+                        net_revenue = ?,
+                        pending_payout = ?,
+                        paid_payout = ?,
+                        last_payout_fate = ?
+                    WHERE partner_id = ?
                     """;
 
             Date txDate = new java.sql.Date(System.currentTimeMillis());
@@ -149,9 +148,9 @@ public class RequestPayoutHandler implements HttpHandler {
             String txId = "TX_" + System.currentTimeMillis();
 
             String insert = """
-                    INSERT INTO Partner_Transactions
-                    (Partner_ID, Transaction_ID, Transaction_Date, Total_Amount, Withdrawal_Amount, Balance_Amount,
-                     Status, Transaction_Type, Comments)
+                    INSERT INTO partner_transactions
+                    (partner_id, transaction_id, transaction_date, total_amount, withdrawal_amount, balance_amount,
+                     Sstatus, transaction_type, comments)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """;
 
@@ -177,13 +176,13 @@ public class RequestPayoutHandler implements HttpHandler {
              * We update rows for this partner where the transaction status is 'Failed'.
              */
             String failureSQL = """
-                    UPDATE Partner_Finance F
-                    JOIN Partner_Transactions T ON F.Partner_ID = T.Partner_ID
+                    UPDATE partner_finance F
+                    JOIN partner_transactions T ON F.partner_id = T.partner_id
                     SET
-                        F.Pending_Payout = F.Pending_Payout + T.Withdrawal_Amount,
-                        F.Paid_Payout = F.Paid_Payout - T.Withdrawal_Amount,
-                        T.Withdrawal_Amount = 0
-                    WHERE T.Status = 'Failed' AND T.Partner_ID = ?
+                        F.pending_payout = F.pending_payout + T.withdrawal_amount,
+                        F.pending_payout = F.pending_payout - T.withdrawal_amount,
+                        T.withdrawal_amount = 0
+                    WHERE T.status = 'Failed' AND T.partner_id = ?
                     """;
 
             try (PreparedStatement ps = finConn.prepareStatement(failureSQL)) {
@@ -210,9 +209,9 @@ public class RequestPayoutHandler implements HttpHandler {
 
     private double computeTotalRevenueFromBookings(Connection conn, String partnerId) throws Exception {
         String sql = """
-            SELECT SUM(Original_Amount) AS total
+            SELECT SUM(original_amount) AS total
             FROM bookings_info
-            WHERE Partner_ID=? AND Booking_Status='COMPLETED'""";
+            WHERE partner_id=? AND booking_status='COMPLETED'""";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, partnerId);
             ResultSet rs = ps.executeQuery();

@@ -69,7 +69,7 @@ public class UpdateBankDetailsHandler implements HttpHandler {
 
             // Check unique Account Number
             if (exists(conn,
-                    "SELECT Partner_ID FROM Partner_Finance WHERE Account_Number = ? AND Partner_ID <> ?",
+                    "SELECT partner_id FROM partner_finance WHERE account_number = ? AND partner_id <> ?",
                     accountNumber, partnerId)) {
                 sendResponse(exchange, 409,
                         "{\"status\":\"error\",\"message\":\"Account Number already registered by another partner\"}");
@@ -78,7 +78,7 @@ public class UpdateBankDetailsHandler implements HttpHandler {
 
             // Check unique PAN number
             if (exists(conn,
-                    "SELECT Partner_ID FROM Partner_Finance WHERE PAN_Tax_ID = ? AND Partner_ID <> ?",
+                    "SELECT partner_id FROM partner_finance WHERE pan_tax_id = ? AND partner_id <> ?",
                     panTaxId, partnerId)) {
                 sendResponse(exchange, 409,
                         "{\"status\":\"error\",\"message\":\"PAN / Tax ID already registered by another partner\"}");
@@ -86,15 +86,15 @@ public class UpdateBankDetailsHandler implements HttpHandler {
             }
 
             boolean alreadyExists = exists(conn,
-                    "SELECT Partner_ID FROM Partner_Finance WHERE Partner_ID = ?", partnerId);
+                    "SELECT partner_id FROM partner_finance WHERE partner_id = ?", partnerId);
 
             if (alreadyExists) {
 
                 String sql = """
-                        UPDATE Partner_Finance SET
-                        Account_Holder_Name=?, Bank_Name=?, Account_Number=?, IFSC_SWIFT=?,
-                        Account_Type=?, PAN_Tax_ID=?, Payout_Type=?
-                        WHERE Partner_ID=?
+                        UPDATE partner_finance SET
+                        account_holder_name=?, bank_name=?, account_number=?, ifsc_swift=?,
+                        account_type=?, pan_tax_id=?, payout_type=?
+                        WHERE partner_id=?
                         """;
 
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -103,26 +103,19 @@ public class UpdateBankDetailsHandler implements HttpHandler {
                     ps.setString(2, bankName);
                     ps.setString(3, accountNumber);
                     ps.setString(4, ifscSwift);
-
-                    // 🔥 FIX HERE (ENUM)
                     ps.setObject(5, accountType, Types.OTHER);
-
                     ps.setString(6, panTaxId);
-
-                    // 🔥 FIX HERE (ENUM)
                     ps.setObject(7, payoutType, Types.OTHER);
-
                     ps.setString(8, partnerId);
-
                     ps.executeUpdate();
                 }
 
             } else {
 
                 String sql = """
-                        INSERT INTO Partner_Finance
-                        (Partner_ID, Account_Holder_Name, Bank_Name, Account_Number, IFSC_SWIFT,
-                         Account_Type, PAN_Tax_ID, Payout_Type)
+                        INSERT INTO partner_finance
+                        (partner_id, account_holder_name, bank_name, account_number, ifsc_swift,
+                         account_type, pan_tax_id, payout_type)
                         VALUES (?,?,?,?,?,?,?,?)
                         """;
 
@@ -133,15 +126,9 @@ public class UpdateBankDetailsHandler implements HttpHandler {
                     ps.setString(3, bankName);
                     ps.setString(4, accountNumber);
                     ps.setString(5, ifscSwift);
-
-                    // 🔥 FIX HERE (ENUM)
                     ps.setObject(6, accountType, Types.OTHER);
-
                     ps.setString(7, panTaxId);
-
-                    // 🔥 FIX HERE (ENUM)
                     ps.setObject(8, payoutType, Types.OTHER);
-
                     ps.executeUpdate();
                 }
             }
