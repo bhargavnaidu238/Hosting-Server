@@ -1,6 +1,5 @@
-package com.hotel.web.partner;
+package com.hotel.utilities;
 
-import com.hotel.utilities.DbConfig;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
@@ -24,7 +23,7 @@ public class HotelImagesHandler implements HttpHandler {
         String method = exchange.getRequestMethod();
         String path = exchange.getRequestURI().getPath();
 
-        // ===== CORS preflight =====
+        // ================= CORS PREFLIGHT =================
         if ("OPTIONS".equalsIgnoreCase(method)) {
             exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
             exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -32,6 +31,42 @@ public class HotelImagesHandler implements HttpHandler {
             exchange.sendResponseHeaders(204, -1);
             return;
         }
+
+        // ======================================================
+        // ================== SUPABASE CONFIG ====================
+        // ======================================================
+        if ("/config".equalsIgnoreCase(path)) {
+
+            if (!"GET".equalsIgnoreCase(method)) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            String supabaseUrl = dbConfig.getSupabaseUrl();
+            String anonKey = dbConfig.getAnonKey();
+
+            String jsonResponse = "{"
+                    + "\"supabaseUrl\":\"" + supabaseUrl + "\","
+                    + "\"anonKey\":\"" + anonKey + "\""
+                    + "}";
+
+            byte[] responseBytes = jsonResponse.getBytes(StandardCharsets.UTF_8);
+
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+
+            exchange.sendResponseHeaders(200, responseBytes.length);
+
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(responseBytes);
+            }
+
+            return;
+        }
+
+        // ======================================================
+        // ================= LOCAL IMAGE SERVING =================
+        // ======================================================
 
         if (!"GET".equalsIgnoreCase(method)) {
             exchange.sendResponseHeaders(405, -1);

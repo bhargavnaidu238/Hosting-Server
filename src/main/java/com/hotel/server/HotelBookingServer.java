@@ -6,6 +6,7 @@ import java.util.concurrent.Executors;
 
 import com.hotel.app.*;
 import com.hotel.utilities.DbConfig;
+import com.hotel.utilities.HotelImagesHandler;
 import com.hotel.web.finance.*;
 import com.hotel.web.partner.*;
 import com.sun.net.httpserver.HttpServer;

@@ -29,6 +29,10 @@ public class DbConfigLoader {
         String imageBaseUrl      = props.getProperty("db.imagebaseurl");
         String hotelImagesPath   = props.getProperty("db.hotelimagespath");
         
+        // ====== Read Image Storage AI Keys ===============
+        String supabaseProjectURL      = props.getProperty("supabaseurl");
+        String supabaseAnonKey   = props.getProperty("anonKey");
+        
         // ===== Payment API properties =====
         String apiKey      = props.getProperty("db.apikey");
         String apiKeySecret   = props.getProperty("db.apikeysecret");
@@ -54,6 +58,13 @@ public class DbConfigLoader {
         }
         if (hotelImagesPath == null || hotelImagesPath.isBlank()) {
             throw new IllegalStateException("Missing property: db.hotelimagespath");
+        }
+        
+        if (supabaseProjectURL == null || supabaseProjectURL.isBlank()) {
+            throw new IllegalStateException("Missing property: supabaseurl");
+        }
+        if (supabaseAnonKey == null || supabaseAnonKey.isBlank()) {
+            throw new IllegalStateException("Missing property: anonKey");
         }
         
         // ===== Validate Payment API Key properties =====

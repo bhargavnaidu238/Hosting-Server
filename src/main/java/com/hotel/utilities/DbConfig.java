@@ -19,6 +19,9 @@ public final class DbConfig {
     private final String apiKey;
     private final String apiKeySecret;
     private final String webHookSecret;
+    
+    private final String supabaseurl;
+    private final String anonKey;
 
     // ===== Lazy DataSources =====
     private volatile HikariDataSource customerDataSource;
@@ -39,6 +42,9 @@ public final class DbConfig {
         this.apiKey        = getEnv("PAYMENT_API_KEY");
         this.apiKeySecret  = getEnv("PAYMENT_API_SECRET");
         this.webHookSecret = getOptionalEnv("PAYMENT_WEBHOOK_SECRET");
+        
+        this.supabaseurl        = getEnv("SUPABASE_URL");
+        this.anonKey  = getEnv("ANON_KEY");
 
         System.out.println("DB CONFIG LOADED");
         System.out.println("CUSTOMER_DB_URL = " + customerDbUrl);
@@ -156,6 +162,14 @@ public final class DbConfig {
 
     public String getWebhookSecret() {
         return webHookSecret;
+    }
+    
+    public String getSupabaseUrl() {
+        return supabaseurl;
+    }
+
+    public String getAnonKey() {
+        return anonKey;
     }
 
     // ===== Shutdown =====
