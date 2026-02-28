@@ -115,6 +115,7 @@ public class AddHotelsHandler implements HttpHandler {
             sendResponse(exchange, 500,
                     "{\"status\":\"error\",\"message\":\"" + escapeJson(e.getMessage()) + "\"}");
         }
+        System.out.println("Received hotel_images: " + params.get("hotel_images"));
     }
 
     private boolean hotelExists(String hotelId) {
