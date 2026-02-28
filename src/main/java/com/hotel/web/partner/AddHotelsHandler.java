@@ -53,6 +53,8 @@ public class AddHotelsHandler implements HttpHandler {
 
         try {
 
+        	
+        	/*
             // Handle Images
             if (params.containsKey("images")) {
                 String imagesJson = params.get("images");
@@ -85,7 +87,15 @@ public class AddHotelsHandler implements HttpHandler {
                 }
 
                 params.put("hotel_images", String.join(",", savedUrls));
-            }
+            }*/
+        	// ================= FIXED IMAGE HANDLING =================
+        	if (params.containsKey("hotel_images")) {
+        	    // Flutter already sends comma-separated Supabase URLs
+        	    String imageUrls = params.get("hotel_images");
+
+        	    // Just store them directly
+        	    params.put("hotel_images", imageUrls);
+        	}
 
             boolean success = isUpdate
                     ? updateHotelInDB(hotelId, params)
