@@ -133,19 +133,24 @@ public class HotelBookingServer {
         String supabaseUrl = System.getenv("SUPABASE_URL");
         String serviceKey = System.getenv("SUPABASE_SERVICE_ROLE_KEY");
 
-        if (supabaseUrl == null || serviceKey == null) throw new RuntimeException("Env Vars Missing");
-        if (supabaseUrl.endsWith("/")) supabaseUrl = supabaseUrl.substring(0, supabaseUrl.length() - 1);
+        if (supabaseUrl == null || serviceKey == null) {
+            throw new RuntimeException("Environment variables SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY are missing on Render");
+        }
 
-        // ✅ RE-CHECK THIS BUCKET NAME: FleminGolmages
-        // Ensure that after 'Flemin' it is 'G' (uppercase), 'o' (lowercase), 'I' (uppercase i)
-        String bucketName = "FleminGolmages"; 
+        if (supabaseUrl.endsWith("/")) {
+            supabaseUrl = supabaseUrl.substring(0, supabaseUrl.length() - 1);
+        }
 
-        // The URL structure MUST be: /storage/v1/object/{bucket}/{path_to_file}
+        // ✅ UPDATED BUCKET NAME
+        String bucketName = "hotels"; 
+
+        // URL format: {base_url}/storage/v1/object/{bucket}/{filename}
         URL url = new URL(supabaseUrl + "/storage/v1/object/" + bucketName + "/" + fileName);
         
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
         conn.setDoOutput(true);
+
         conn.setRequestProperty("Authorization", "Bearer " + serviceKey);
         conn.setRequestProperty("Content-Type", "image/jpeg");
         conn.setRequestProperty("x-upsert", "true"); 
@@ -156,15 +161,15 @@ public class HotelBookingServer {
 
         int responseCode = conn.getResponseCode();
         if (responseCode == 200 || responseCode == 201) {
+            // Return the public URL for the database
             return supabaseUrl + "/storage/v1/object/public/" + bucketName + "/" + fileName;
         } else {
-            // Log the exact error body for debugging
-            StringBuilder errorBody = new StringBuilder();
+            StringBuilder errorMsg = new StringBuilder();
             try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getErrorStream()))) {
                 String line;
-                while ((line = br.readLine()) != null) errorBody.append(line);
+                while ((line = br.readLine()) != null) errorMsg.append(line);
             }
-            System.err.println("Supabase API Error: " + errorBody.toString());
+            System.err.println("Supabase Error (" + responseCode + "): " + errorMsg.toString());
             throw new RuntimeException("Supabase upload failed: " + responseCode);
         }
     }
