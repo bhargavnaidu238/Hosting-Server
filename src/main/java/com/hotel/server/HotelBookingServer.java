@@ -1,43 +1,52 @@
 package com.hotel.server;
 
-import java.net.InetSocketAddress;
-import java.sql.Connection;
-import java.util.concurrent.Executors;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
 import java.net.URL;
+import java.sql.Connection;
+import java.util.concurrent.Executors;
 
-import com.hotel.app.*;
+import com.hotel.app.AppFilterHandler;
+import com.hotel.app.BookingHandler;
+import com.hotel.app.BookingHistoryHandler;
+import com.hotel.app.HomePageHandler;
+import com.hotel.app.HotelsHandler;
+import com.hotel.app.LoginHandler;
+import com.hotel.app.PaymentHandler;
+import com.hotel.app.PgsHandler;
+import com.hotel.app.ProfileHandler;
+import com.hotel.app.RegisterHandler;
+import com.hotel.app.RewardsWalletHandler;
 import com.hotel.utilities.DbConfig;
 import com.hotel.utilities.HotelImagesHandler;
-import com.hotel.web.finance.*;
-import com.hotel.web.partner.*;
+import com.hotel.web.finance.GetPartnerFinanceHandler;
+import com.hotel.web.finance.GetPartnerTransactionsHandler;
+import com.hotel.web.finance.RequestPayoutHandler;
+import com.hotel.web.finance.SetFinanceNotificationViewedHandler;
+import com.hotel.web.finance.UpdateBankDetailsHandler;
+import com.hotel.web.partner.AddHotelsHandler;
+import com.hotel.web.partner.AddPgHandler;
+import com.hotel.web.partner.WebBookingHandler;
+import com.hotel.web.partner.WebDashBoardHandler;
+import com.hotel.web.partner.WebLoginRegisterHandler;
+import com.hotel.web.partner.WebProfileHandler;
+import com.hotel.web.partner.WebViewHotelsHandler;
+import com.hotel.web.partner.WebViewPGsHandler;
 import com.sun.net.httpserver.HttpServer;
 
 public class HotelBookingServer {
 
     public static void main(String[] args) throws Exception {
-
-        // ✅ Render dynamic port
-        int port = Integer.parseInt(
-                System.getenv().getOrDefault("PORT", "10000")
-        );
-
-        HttpServer server = HttpServer.create(
-                new InetSocketAddress("0.0.0.0", port),
-                0
-        );
-
+        int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "10000"));
+        HttpServer server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
         System.out.println("🚀 Server starting on port: " + port);
 
-        // ===== Initialize DB Config =====
         DbConfig dbConfig = new DbConfig();
-
-        // ✅ Validate DB connections safely
-        try (
-                Connection customerConn = dbConfig.getCustomerDataSource().getConnection();
-                Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()
-        ) {
+        try (Connection customerConn = dbConfig.getCustomerDataSource().getConnection();
+             Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()) {
             System.out.println("✅ Database connections validated successfully");
         } catch (Exception e) {
             System.err.println("❌ Database connection failed!");
@@ -45,22 +54,7 @@ public class HotelBookingServer {
             System.exit(1);
         }
 
-        // ===== Basic Health Endpoints =====
-        server.createContext("/", exchange -> {
-            String response = "Hotel Backend is running";
-            exchange.sendResponseHeaders(200, response.getBytes().length);
-            exchange.getResponseBody().write(response.getBytes());
-            exchange.close();
-        });
-
-        server.createContext("/health", exchange -> {
-            String response = "OK";
-            exchange.sendResponseHeaders(200, response.getBytes().length);
-            exchange.getResponseBody().write(response.getBytes());
-            exchange.close();
-        });
-
-        // ========== MOBILE / APP HANDLERS ==========
+       // ========== MOBILE / APP HANDLERS ==========
         server.createContext("/login", new LoginHandler(dbConfig));
         server.createContext("/app/forgot-password/verify", new LoginHandler(dbConfig));
         server.createContext("/app/forgot-password/change", new LoginHandler(dbConfig));
@@ -118,10 +112,9 @@ public class HotelBookingServer {
         server.createContext("/getPartnerTransactions", new GetPartnerTransactionsHandler(dbConfig));
 
 
-        // ✅ Use proper thread pool instead of default
+
         server.setExecutor(Executors.newFixedThreadPool(20));
 
-        // ===== Graceful Shutdown =====
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("🛑 Shutting down server...");
             dbConfig.close();
@@ -129,29 +122,26 @@ public class HotelBookingServer {
         }));
 
         server.start();
-
         System.out.println("✅ Server started successfully on port " + port);
     }
 
     /**
      * ✅ SHARED SUPABASE UPLOAD LOGIC
-     * This method is public and static so AddHotelsHandler can access it.
+     * Refined to handle Supabase Storage API v1 requirements.
      */
     public static String uploadToSupabase(byte[] imageBytes, String fileName) throws Exception {
         String supabaseUrl = System.getenv("SUPABASE_URL");
         String serviceKey = System.getenv("SUPABASE_SERVICE_ROLE_KEY");
 
-        // Validate environment variables
         if (supabaseUrl == null || serviceKey == null) {
-            throw new RuntimeException("Supabase credentials (URL/Key) are missing in Render Environment Variables!");
+            throw new RuntimeException("Missing Supabase Environment Variables (URL or Key) on Render!");
         }
 
-        // Remove trailing slash if present
         if (supabaseUrl.endsWith("/")) {
             supabaseUrl = supabaseUrl.substring(0, supabaseUrl.length() - 1);
         }
 
-        // Define the target bucket URL
+        // The URL must point to the specific bucket and object path
         URL url = new URL(supabaseUrl + "/storage/v1/object/FleminGolmages/" + fileName);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         
@@ -159,19 +149,24 @@ public class HotelBookingServer {
         conn.setDoOutput(true);
         conn.setRequestProperty("Authorization", "Bearer " + serviceKey);
         conn.setRequestProperty("Content-Type", "image/jpeg");
-        conn.setRequestProperty("x-upsert", "true"); // Update if exists
+        conn.setRequestProperty("x-upsert", "true");
 
-        // Send the image data
         try (OutputStream os = conn.getOutputStream()) {
             os.write(imageBytes);
         }
 
         int responseCode = conn.getResponseCode();
-        
         if (responseCode == 200 || responseCode == 201) {
-            // Generate and return the Public URL for Flutter to display the image
+            // Returns the public URL for retrieval
             return supabaseUrl + "/storage/v1/object/public/FleminGolmages/" + fileName;
         } else {
+            // READ ERROR BODY FROM SUPABASE FOR DEBUGGING
+            StringBuilder errorResponse = new StringBuilder();
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getErrorStream()))) {
+                String line;
+                while ((line = br.readLine()) != null) errorResponse.append(line);
+            }
+            System.err.println("Supabase API Error (" + responseCode + "): " + errorResponse.toString());
             throw new RuntimeException("Supabase upload failed with HTTP status: " + responseCode);
         }
     }

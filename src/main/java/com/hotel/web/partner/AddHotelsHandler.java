@@ -68,47 +68,60 @@ public class AddHotelsHandler implements HttpHandler {
         }
 
         try {
-            // Handle Images
+            // ============================================================
+            // ✅ IMAGE PROCESSING LOGIC
+            // ============================================================
             if (params.containsKey("images")) {
-                JSONObject json = new JSONObject(params.get("images"));
-                List<String> savedUrls = new ArrayList<>();
-                
-                // Detect if running on Render/Production vs Local
-                boolean isProduction = System.getenv("PORT") != null;
+                try {
+                    JSONObject json = new JSONObject(params.get("images"));
+                    List<String> savedUrls = new ArrayList<>();
+                    
+                    // Detect environment: PORT is set by Render
+                    boolean isProduction = System.getenv("PORT") != null;
 
-                for (String category : json.keySet()) {
-                    String safeCategory = category.replaceAll("[/\\\\]", "_");
-                    JSONArray arr = json.getJSONArray(category);
+                    for (String category : json.keySet()) {
+                        String safeCategory = category.replaceAll("[/\\\\]", "_");
+                        JSONArray arr = json.getJSONArray(category);
 
-                    for (int i = 0; i < arr.length(); i++) {
-                        String base64Data = arr.getString(i);
-                        // Strip metadata if present (e.g., data:image/png;base64,)
-                        if (base64Data.contains(",")) {
-                            base64Data = base64Data.split(",")[1];
+                        for (int i = 0; i < arr.length(); i++) {
+                            String base64Data = arr.getString(i);
+                            
+                            // Strip metadata headers (e.g. "data:image/png;base64,")
+                            if (base64Data.contains(",")) {
+                                base64Data = base64Data.split(",")[1];
+                            }
+                            
+                            byte[] data = Base64.getDecoder().decode(base64Data);
+                            String fileName = hotelId + "_" + safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
+                            
+                            String finalUrl;
+                            if (isProduction) {
+                                // Production: Upload to Supabase using Server utility
+                                finalUrl = HotelBookingServer.uploadToSupabase(data, fileName);
+                            } else {
+                                // Local: Save to local filesystem folder
+                                File dir = new File(dbConfig.getHotelImagesPath() + File.separator + hotelId + File.separator + safeCategory);
+                                if (!dir.exists()) dir.mkdirs();
+                                File f = new File(dir, fileName);
+                                Files.write(f.toPath(), data);
+                                finalUrl = "http://localhost:8080/hotel_images/" + hotelId + "/" + safeCategory + "/" + fileName;
+                            }
+                            savedUrls.add(finalUrl);
                         }
-                        
-                        byte[] data = Base64.getDecoder().decode(base64Data);
-                        String fileName = hotelId + "_" + safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
-                        
-                        String finalUrl;
-                        if (isProduction) {
-                            // ✅ Call the logic centralized in Server file
-                            finalUrl = HotelBookingServer.uploadToSupabase(data, fileName);
-                        } else {
-                            // ✅ Local logic: save to the local hotel_images folder
-                            File dir = new File(dbConfig.getHotelImagesPath() + File.separator + hotelId + File.separator + safeCategory);
-                            if (!dir.exists()) dir.mkdirs();
-                            File f = new File(dir, fileName);
-                            Files.write(f.toPath(), data);
-                            finalUrl = "http://localhost:8080/hotel_images/" + hotelId + "/" + safeCategory + "/" + fileName;
-                        }
-                        savedUrls.add(finalUrl);
                     }
+                    // Store joined URLs in params to be picked up by the DB methods
+                    if (!savedUrls.isEmpty()) {
+                        params.put("hotel_images", String.join(",", savedUrls));
+                    }
+                } catch (Exception imgEx) {
+                    System.err.println("Error processing images: " + imgEx.getMessage());
+                    // We continue the flow so the text data can still be saved
                 }
-                // Store combined URLs back into the params map to be saved in DB
-                params.put("hotel_images", String.join(",", savedUrls));
             }
 
+            // ============================================================
+            // ✅ DATABASE PERSISTENCE
+            // ============================================================
             boolean success = isUpdate
                     ? updateHotelInDB(hotelId, params)
                     : addHotelToDB(hotelId, params);
@@ -117,7 +130,7 @@ public class AddHotelsHandler implements HttpHandler {
                 String msg = isUpdate ? "Hotel updated successfully!" : "Hotel added successfully!";
                 sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"" + msg + "\"}");
             } else {
-                sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"Failed to save hotel.\"}");
+                sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"Failed to save hotel to database.\"}");
             }
 
         } catch (Exception e) {
@@ -189,7 +202,7 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setDouble(18, Double.parseDouble(params.getOrDefault("rating", "0.0")));
         stmt.setString(19, params.getOrDefault("hotel_contact", ""));
         stmt.setString(20, params.getOrDefault("about_this_property", ""));
-        stmt.setString(21, params.get("hotel_images")); // Use processed URLs
+        stmt.setString(21, params.get("hotel_images")); // Pull generated URL string
 
         String customization = params.getOrDefault("customization", "No");
         stmt.setObject(22, VALID_CUSTOMIZATION.contains(customization) ? customization : "No", Types.OTHER);
@@ -242,9 +255,7 @@ public class AddHotelsHandler implements HttpHandler {
         for (String pair : body.split("&")) {
             String[] parts = pair.split("=", 2);
             if (parts.length == 2) {
-                String key = URLDecoder.decode(parts[0], "UTF-8");
-                String val = URLDecoder.decode(parts[1], "UTF-8");
-                map.put(key, val);
+                map.put(URLDecoder.decode(parts[0], "UTF-8"), URLDecoder.decode(parts[1], "UTF-8"));
             }
         }
         return map;
@@ -261,9 +272,6 @@ public class AddHotelsHandler implements HttpHandler {
 
     private String escapeJson(String s) {
         if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r");
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
     }
 }
