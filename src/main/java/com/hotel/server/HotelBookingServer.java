@@ -3,6 +3,9 @@ package com.hotel.server;
 import java.net.InetSocketAddress;
 import java.sql.Connection;
 import java.util.concurrent.Executors;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 import com.hotel.app.*;
 import com.hotel.utilities.DbConfig;
@@ -114,6 +117,7 @@ public class HotelBookingServer {
         server.createContext("/requestPayout", new RequestPayoutHandler(dbConfig));
         server.createContext("/getPartnerTransactions", new GetPartnerTransactionsHandler(dbConfig));
 
+
         // ✅ Use proper thread pool instead of default
         server.setExecutor(Executors.newFixedThreadPool(20));
 
@@ -127,5 +131,48 @@ public class HotelBookingServer {
         server.start();
 
         System.out.println("✅ Server started successfully on port " + port);
+    }
+
+    /**
+     * ✅ SHARED SUPABASE UPLOAD LOGIC
+     * This method is public and static so AddHotelsHandler can access it.
+     */
+    public static String uploadToSupabase(byte[] imageBytes, String fileName) throws Exception {
+        String supabaseUrl = System.getenv("SUPABASE_URL");
+        String serviceKey = System.getenv("SUPABASE_SERVICE_ROLE_KEY");
+
+        // Validate environment variables
+        if (supabaseUrl == null || serviceKey == null) {
+            throw new RuntimeException("Supabase credentials (URL/Key) are missing in Render Environment Variables!");
+        }
+
+        // Remove trailing slash if present
+        if (supabaseUrl.endsWith("/")) {
+            supabaseUrl = supabaseUrl.substring(0, supabaseUrl.length() - 1);
+        }
+
+        // Define the target bucket URL
+        URL url = new URL(supabaseUrl + "/storage/v1/object/FleminGolmages/" + fileName);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        
+        conn.setRequestMethod("POST");
+        conn.setDoOutput(true);
+        conn.setRequestProperty("Authorization", "Bearer " + serviceKey);
+        conn.setRequestProperty("Content-Type", "image/jpeg");
+        conn.setRequestProperty("x-upsert", "true"); // Update if exists
+
+        // Send the image data
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(imageBytes);
+        }
+
+        int responseCode = conn.getResponseCode();
+        
+        if (responseCode == 200 || responseCode == 201) {
+            // Generate and return the Public URL for Flutter to display the image
+            return supabaseUrl + "/storage/v1/object/public/FleminGolmages/" + fileName;
+        } else {
+            throw new RuntimeException("Supabase upload failed with HTTP status: " + responseCode);
+        }
     }
 }
