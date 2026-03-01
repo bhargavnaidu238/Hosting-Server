@@ -8,23 +8,24 @@ import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.Base64;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import com.hotel.utilities.DbConfig;
-import com.hotel.server.HotelBookingServer; // Ensure this import matches your server package
+import com.hotel.server.HotelBookingServer;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
@@ -41,7 +42,7 @@ public class AddHotelsHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // CORS Headers
+
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
@@ -72,7 +73,7 @@ public class AddHotelsHandler implements HttpHandler {
                 JSONObject json = new JSONObject(params.get("images"));
                 List<String> savedUrls = new ArrayList<>();
                 
-                // Detection for Render (Production) vs Local
+                // Detect if running on Render/Production vs Local
                 boolean isProduction = System.getenv("PORT") != null;
 
                 for (String category : json.keySet()) {
@@ -80,24 +81,31 @@ public class AddHotelsHandler implements HttpHandler {
                     JSONArray arr = json.getJSONArray(category);
 
                     for (int i = 0; i < arr.length(); i++) {
-                        byte[] data = Base64.getDecoder().decode(arr.getString(i));
+                        String base64Data = arr.getString(i);
+                        // Strip metadata if present (e.g., data:image/png;base64,)
+                        if (base64Data.contains(",")) {
+                            base64Data = base64Data.split(",")[1];
+                        }
+                        
+                        byte[] data = Base64.getDecoder().decode(base64Data);
                         String fileName = hotelId + "_" + safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
                         
                         String finalUrl;
                         if (isProduction) {
-                            // ✅ Call the centralized logic in HotelBookingServer
+                            // ✅ Call the logic centralized in Server file
                             finalUrl = HotelBookingServer.uploadToSupabase(data, fileName);
                         } else {
-                            // ✅ Local logic for flutter run
+                            // ✅ Local logic: save to the local hotel_images folder
                             File dir = new File(dbConfig.getHotelImagesPath() + File.separator + hotelId + File.separator + safeCategory);
                             if (!dir.exists()) dir.mkdirs();
                             File f = new File(dir, fileName);
-                            java.nio.file.Files.write(f.toPath(), data);
+                            Files.write(f.toPath(), data);
                             finalUrl = "http://localhost:8080/hotel_images/" + hotelId + "/" + safeCategory + "/" + fileName;
                         }
                         savedUrls.add(finalUrl);
                     }
                 }
+                // Store combined URLs back into the params map to be saved in DB
                 params.put("hotel_images", String.join(",", savedUrls));
             }
 
@@ -181,15 +189,13 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setDouble(18, Double.parseDouble(params.getOrDefault("rating", "0.0")));
         stmt.setString(19, params.getOrDefault("hotel_contact", ""));
         stmt.setString(20, params.getOrDefault("about_this_property", ""));
-        stmt.setString(21, params.getOrDefault("hotel_images", null));
+        stmt.setString(21, params.get("hotel_images")); // Use processed URLs
 
         String customization = params.getOrDefault("customization", "No");
-        if (!VALID_CUSTOMIZATION.contains(customization)) customization = "No";
-        stmt.setObject(22, customization, Types.OTHER);
+        stmt.setObject(22, VALID_CUSTOMIZATION.contains(customization) ? customization : "No", Types.OTHER);
 
         String status = params.getOrDefault("status", "Active");
-        if (!VALID_STATUS.contains(status)) status = "Active";
-        stmt.setObject(23, status, Types.OTHER);
+        stmt.setObject(23, VALID_STATUS.contains(status) ? status : "Active", Types.OTHER);
     }
 
     private void setHotelParamsForUpdate(PreparedStatement stmt, Map<String, String> params) throws SQLException {
@@ -211,15 +217,13 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setDouble(16, Double.parseDouble(params.getOrDefault("rating", "0.0")));
         stmt.setString(17, params.getOrDefault("hotel_contact", ""));
         stmt.setString(18, params.getOrDefault("about_this_property", ""));
-        stmt.setString(19, params.getOrDefault("hotel_images", null));
+        stmt.setString(19, params.get("hotel_images"));
 
         String customization = params.getOrDefault("customization", "No");
-        if (!VALID_CUSTOMIZATION.contains(customization)) customization = "No";
-        stmt.setObject(20, customization, Types.OTHER);
+        stmt.setObject(20, VALID_CUSTOMIZATION.contains(customization) ? customization : "No", Types.OTHER);
 
         String status = params.getOrDefault("status", "Active");
-        if (!VALID_STATUS.contains(status)) status = "Active";
-        stmt.setObject(21, status, Types.OTHER);
+        stmt.setObject(21, VALID_STATUS.contains(status) ? status : "Active", Types.OTHER);
     }
 
     private String readRequestBody(HttpExchange exchange) throws IOException {
@@ -234,6 +238,7 @@ public class AddHotelsHandler implements HttpHandler {
     private Map<String, String> parseForm(String body) throws UnsupportedEncodingException {
         Map<String, String> map = new HashMap<>();
         if (body == null || body.isEmpty()) return map;
+
         for (String pair : body.split("&")) {
             String[] parts = pair.split("=", 2);
             if (parts.length == 2) {
@@ -256,6 +261,9 @@ public class AddHotelsHandler implements HttpHandler {
 
     private String escapeJson(String s) {
         if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+        return s.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r");
     }
 }
