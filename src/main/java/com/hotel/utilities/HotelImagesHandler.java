@@ -26,8 +26,8 @@ public class HotelImagesHandler implements HttpHandler {
         String path = exchange.getRequestURI().getPath();
 
         // ================= CORS =================
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         if ("OPTIONS".equalsIgnoreCase(method)) {
-            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
             exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
             exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "*");
             exchange.sendResponseHeaders(204, -1);
@@ -38,17 +38,13 @@ public class HotelImagesHandler implements HttpHandler {
         // ================= SUPABASE CONFIG ====================
         // ======================================================
         if ("/config".equalsIgnoreCase(path)) {
-
             String jsonResponse = "{"
                     + "\"supabaseUrl\":\"" + dbConfig.getSupabaseUrl() + "\","
                     + "\"anonKey\":\"" + dbConfig.getAnonKey() + "\""
                     + "}";
 
             byte[] responseBytes = jsonResponse.getBytes(StandardCharsets.UTF_8);
-
             exchange.getResponseHeaders().set("Content-Type", "application/json");
-            exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-
             exchange.sendResponseHeaders(200, responseBytes.length);
 
             try (OutputStream os = exchange.getResponseBody()) {
@@ -66,17 +62,23 @@ public class HotelImagesHandler implements HttpHandler {
             String serviceKey = System.getenv("SUPABASE_SERVICE_ROLE_KEY");
 
             if (supabaseUrl == null || serviceKey == null) {
+                System.err.println("Upload Failed: Supabase Environment variables are missing.");
                 exchange.sendResponseHeaders(500, -1);
                 return;
             }
 
-            byte[] imageBytes = exchange.getRequestBody().readAllBytes();
+            // Normalize URL
+            if (supabaseUrl.endsWith("/")) {
+                supabaseUrl = supabaseUrl.substring(0, supabaseUrl.length() - 1);
+            }
 
+            byte[] imageBytes = exchange.getRequestBody().readAllBytes();
             String fileName = UUID.randomUUID() + ".jpg";
 
-            String uploadUrl = supabaseUrl
-                    + "/storage/v1/object/FleminGolmages/"
-                    + fileName;
+            // ✅ Updated bucket name to 'hotels' to match current setup
+            String bucketName = "hotels";
+
+            String uploadUrl = supabaseUrl + "/storage/v1/object/" + bucketName + "/" + fileName;
 
             URL url = new URL(uploadUrl);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -94,28 +96,26 @@ public class HotelImagesHandler implements HttpHandler {
             int responseCode = conn.getResponseCode();
 
             if (responseCode == 200 || responseCode == 201) {
-
-                String publicUrl = supabaseUrl
-                        + "/storage/v1/object/public/FleminGolmages/"
-                        + fileName;
-
+                String publicUrl = supabaseUrl + "/storage/v1/object/public/" + bucketName + "/" + fileName;
                 String json = "{ \"url\": \"" + publicUrl + "\" }";
-
                 byte[] resp = json.getBytes(StandardCharsets.UTF_8);
 
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
-                exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-
                 exchange.sendResponseHeaders(200, resp.length);
 
                 try (OutputStream os = exchange.getResponseBody()) {
                     os.write(resp);
                 }
-
             } else {
-                exchange.sendResponseHeaders(500, -1);
+                // Read error message from Supabase for debugging in Render logs
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getErrorStream()))) {
+                    StringBuilder errorResponse = new StringBuilder();
+                    String line;
+                    while ((line = br.readLine()) != null) errorResponse.append(line);
+                    System.err.println("Supabase Upload Error (" + responseCode + "): " + errorResponse.toString());
+                }
+                exchange.sendResponseHeaders(responseCode, -1);
             }
-
             return;
         }
 
@@ -128,42 +128,42 @@ public class HotelImagesHandler implements HttpHandler {
             return;
         }
 
-        if (!path.startsWith("/hotel_images/")) {
-            exchange.sendResponseHeaders(404, -1);
+        if (path.startsWith("/hotel_images/")) {
+            String relativePath = URLDecoder.decode(
+                    path.substring("/hotel_images/".length()),
+                    StandardCharsets.UTF_8
+            );
+
+            Path imageRoot = Path.of(dbConfig.getHotelImagesPath()).normalize();
+            Path resolvedPath = imageRoot.resolve(relativePath).normalize();
+
+            // Prevent Path Traversal Attacks
+            if (!resolvedPath.startsWith(imageRoot)) {
+                exchange.sendResponseHeaders(403, -1);
+                return;
+            }
+
+            File file = resolvedPath.toFile();
+
+            if (!file.exists() || file.isDirectory()) {
+                exchange.sendResponseHeaders(404, -1);
+                return;
+            }
+
+            String contentType = Files.probeContentType(file.toPath());
+            if (contentType == null) contentType = "application/octet-stream";
+
+            exchange.getResponseHeaders().set("Content-Type", contentType);
+            exchange.sendResponseHeaders(200, file.length());
+
+            try (OutputStream os = exchange.getResponseBody();
+                 FileInputStream fis = new FileInputStream(file)) {
+                fis.transferTo(os);
+            }
             return;
         }
 
-        String relativePath = URLDecoder.decode(
-                path.substring("/hotel_images/".length()),
-                StandardCharsets.UTF_8
-        );
-
-        Path imageRoot = Path.of(dbConfig.getHotelImagesPath()).normalize();
-        Path resolvedPath = imageRoot.resolve(relativePath).normalize();
-
-        if (!resolvedPath.startsWith(imageRoot)) {
-            exchange.sendResponseHeaders(403, -1);
-            return;
-        }
-
-        File file = resolvedPath.toFile();
-
-        if (!file.exists() || file.isDirectory()) {
-            exchange.sendResponseHeaders(404, -1);
-            return;
-        }
-
-        String contentType = Files.probeContentType(file.toPath());
-        if (contentType == null) contentType = "application/octet-stream";
-
-        exchange.getResponseHeaders().set("Content-Type", contentType);
-        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-
-        exchange.sendResponseHeaders(200, file.length());
-
-        try (OutputStream os = exchange.getResponseBody();
-             FileInputStream fis = new FileInputStream(file)) {
-            fis.transferTo(os);
-        }
+        // If no paths match
+        exchange.sendResponseHeaders(404, -1);
     }
 }
