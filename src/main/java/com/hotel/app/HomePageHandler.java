@@ -48,6 +48,7 @@ public class HomePageHandler implements HttpHandler {
                 String value = pair.length > 1
                         ? URLDecoder.decode(pair[1], StandardCharsets.UTF_8)
                         : "";
+                
                 if ("type".equalsIgnoreCase(key)) {
                     hotelType = value.trim();
                 } else if ("query".equalsIgnoreCase(key) || "q".equalsIgnoreCase(key)) {
@@ -56,11 +57,29 @@ public class HomePageHandler implements HttpHandler {
             }
         }
 
+        // --- FIX: Normalize Plurals and Types ---
+        // If the user types "Hotels" in the search bar, it might come in as searchQuery.
+        // We check if the search is actually a category.
+        if (searchQuery != null && hotelType == null) {
+            String lowerSearch = searchQuery.toLowerCase().trim();
+            // List of known categories
+            List<String> categories = Arrays.asList("hotel", "resort", "lodge", "payingguest", "pg");
+            
+            String singularSearch = lowerSearch.endsWith("s") && lowerSearch.length() > 3 
+                                    ? lowerSearch.substring(0, lowerSearch.length() - 1) 
+                                    : lowerSearch;
+
+            if (categories.contains(singularSearch)) {
+                hotelType = singularSearch;
+                searchQuery = null; // Clear search so it shows ALL of that category
+            }
+        }
+
         String normalizedType = hotelType == null
                 ? ""
                 : hotelType.replaceAll("[_\\-\\s]", "").toLowerCase();
 
-        if ("payingguest".equals(normalizedType)) {
+        if ("payingguest".equals(normalizedType) || "pg".equals(normalizedType)) {
             handlePayingGuestRequest(exchange, searchQuery);
             return;
         }
@@ -87,8 +106,14 @@ public class HomePageHandler implements HttpHandler {
 
         StringBuilder sql = new StringBuilder(baseSql);
 
+        // Normalize hotelType for SQL: strip 's' if user passed "hotels"
+        String finalType = null;
         if (hotelType != null && !hotelType.isBlank()) {
-            sql.append(" AND LOWER(hotel_type) = LOWER(?)");
+            finalType = hotelType.toLowerCase().trim();
+            if (finalType.endsWith("s") && finalType.length() > 3) {
+                finalType = finalType.substring(0, finalType.length() - 1);
+            }
+            sql.append(" AND LOWER(hotel_type) = ?");
         }
 
         if (searchQuery != null && !searchQuery.isBlank()) {
@@ -106,8 +131,8 @@ public class HomePageHandler implements HttpHandler {
              PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
 
             int idx = 1;
-            if (hotelType != null && !hotelType.isBlank()) {
-                stmt.setString(idx++, hotelType);
+            if (finalType != null) {
+                stmt.setString(idx++, finalType);
             }
             if (searchQuery != null && !searchQuery.isBlank()) {
                 String p = "%" + searchQuery.toLowerCase() + "%";
@@ -120,37 +145,33 @@ public class HomePageHandler implements HttpHandler {
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     Map<String, Object> hotel = new LinkedHashMap<>();
-
                     hotel.put("hotel_id", rs.getString("hotel_id"));
                     hotel.put("partner_id", rs.getString("partner_id"));
                     hotel.put("hotel_name", rs.getString("hotel_name"));
                     hotel.put("hotel_type", rs.getString("hotel_type"));
-                    hotel.put("room_type", rs.getString("Room_Type"));
-                    hotel.put("address", rs.getString("Address"));
-                    hotel.put("city", rs.getString("City"));
-                    hotel.put("state", rs.getString("State"));
-                    hotel.put("country", rs.getString("Country"));
-                    hotel.put("pincode", rs.getString("Pincode"));
-                    hotel.put("hotel_location", rs.getString("Hotel_Location"));
-                    hotel.put("total_rooms", rs.getObject("Total_Rooms"));
-                    hotel.put("available_rooms", rs.getObject("Available_Rooms"));
-                    hotel.put("room_price", rs.getObject("Room_Price"));
-                    hotel.put("amenities", rs.getString("Amenities"));
-                    hotel.put("description", rs.getString("Description"));
-                    hotel.put("policies", rs.getString("Policies"));
-                    hotel.put("rating", rs.getObject("Rating"));
-                    hotel.put("hotel_contact", rs.getString("Hotel_Contact"));
-                    hotel.put("about_this_property", rs.getString("About_This_Property"));
-                    hotel.put("customization", rs.getString("Customization"));
-                    hotel.put("status", rs.getString("Status"));
-
-                    // FIXED: Return as a comma-separated string to match Flutter's expectations
-                    hotel.put("Hotel_Images", buildImageString(rs.getString("hotel_images")));
+                    hotel.put("room_type", rs.getString("room_type"));
+                    hotel.put("address", rs.getString("address"));
+                    hotel.put("city", rs.getString("city"));
+                    hotel.put("state", rs.getString("state"));
+                    hotel.put("country", rs.getString("country"));
+                    hotel.put("pincode", rs.getString("pincode"));
+                    hotel.put("hotel_location", rs.getString("hotel_location"));
+                    hotel.put("total_rooms", rs.getObject("total_rooms"));
+                    hotel.put("available_rooms", rs.getObject("available_rooms"));
+                    hotel.put("room_price", rs.getObject("room_price"));
+                    hotel.put("amenities", rs.getString("amenities"));
+                    hotel.put("description", rs.getString("description"));
+                    hotel.put("policies", rs.getString("policies"));
+                    hotel.put("rating", rs.getObject("rating"));
+                    hotel.put("hotel_contact", rs.getString("hotel_contact"));
+                    hotel.put("about_this_property", rs.getString("about_this_property"));
+                    hotel.put("customization", rs.getString("customization"));
+                    hotel.put("status", rs.getString("status"));
+                    hotel.put("hotel_images", buildImageString(rs.getString("hotel_images")));
 
                     hotels.add(hotel);
                 }
             }
-
             sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(hotels));
 
         } catch (Exception e) {
@@ -168,13 +189,10 @@ public class HomePageHandler implements HttpHandler {
         String baseSql = """
             SELECT pd_id, partner_id, pg_name, pg_type, room_type,
                    address, city, state, country, pincode,
-                   total_single_sharing_rooms,
-                   total_double_sharing_rooms,
-                   total_three_sharing_rooms,
-                   total_four_sharing_rooms,
-                   total_five_sharing_rooms,
-                   hotel_location, available_rooms, room_price,
-                   amenities, description, policies, rating,
+                   total_single_sharing_rooms, total_double_sharing_rooms,
+                   total_three_sharing_rooms, total_four_sharing_rooms,
+                   total_five_sharing_rooms, hotel_location, available_rooms,
+                   room_price, amenities, description, policies, rating,
                    pg_contact, about_this_pg, pg_images, status
             FROM paying_guest_info
             WHERE status = 'Active'
@@ -207,7 +225,6 @@ public class HomePageHandler implements HttpHandler {
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     Map<String, Object> pg = new LinkedHashMap<>();
-
                     pg.put("pd_id", rs.getString("pd_id"));
                     pg.put("partner_id", rs.getString("partner_id"));
                     pg.put("pg_name", rs.getString("pg_name"));
@@ -233,14 +250,11 @@ public class HomePageHandler implements HttpHandler {
                     pg.put("pg_contact", rs.getString("pg_contact"));
                     pg.put("about_this_pg", rs.getString("about_this_pg"));
                     pg.put("status", rs.getString("status"));
-
-                    // FIXED: Return as a comma-separated string
                     pg.put("pg_images", buildImageString(rs.getString("pg_images")));
 
                     pgs.add(pg);
                 }
             }
-
             sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(pgs));
 
         } catch (Exception e) {
@@ -251,25 +265,16 @@ public class HomePageHandler implements HttpHandler {
 
     // =================== HELPERS ===================
     
-    /**
-     * FIXED: Processes the raw database string and returns a single comma-separated 
-     * string of full URLs. This ensures Supabase links remain untouched while 
-     * local paths get the correct prefix.
-     */
     private String buildImageString(String raw) {
         if (raw == null || raw.isBlank()) return "";
-
         List<String> processedList = new ArrayList<>();
         String[] parts = raw.split(",");
-
         for (String p : parts) {
             String t = p.trim();
             if (t.isEmpty()) continue;
-
             if (t.toLowerCase().startsWith("http://") || t.toLowerCase().startsWith("https://")) {
                 processedList.add(t);
             } else {
-                // Prepend base URL for local storage images
                 String baseUrl = dbConfig.getImageBaseUrl();
                 if (!baseUrl.endsWith("/")) baseUrl += "/";
                 processedList.add(baseUrl + t.replaceAll("^/+", ""));
@@ -284,8 +289,7 @@ public class HomePageHandler implements HttpHandler {
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization");
     }
 
-    private void sendJsonResponse(HttpExchange exchange, int status, String json)
-            throws IOException {
+    private void sendJsonResponse(HttpExchange exchange, int status, String json) throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(status, bytes.length);
