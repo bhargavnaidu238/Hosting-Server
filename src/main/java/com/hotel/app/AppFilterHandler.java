@@ -73,89 +73,35 @@ public class AppFilterHandler implements HttpHandler {
 
     private JSONArray fetchHotelsWithFilters(JSONObject filters, String sortBy) throws SQLException {
         JSONArray hotelsArray = new JSONArray();
-        StringBuilder baseQuery = new StringBuilder("SELECT * FROM hotels_info WHERE 1=1");
+        // Start with a clean base query
+        StringBuilder baseQuery = new StringBuilder("SELECT * FROM hotels_info WHERE Status = 'Active'");
         List<Object> params = new ArrayList<>();
 
-        // City filter (flexible: check City and State)
+        // 1. Keyword Search (Fixes Search Bar)
+        if (filters.has("searchQuery") && !filters.optString("searchQuery").isEmpty()) {
+            String query = "%" + filters.getString("searchQuery").toLowerCase() + "%";
+            baseQuery.append(" AND (LOWER(Hotel_Name) LIKE ? OR LOWER(city) LIKE ? OR LOWER(Area) LIKE ?)");
+            params.add(query); params.add(query); params.add(query);
+        }
+
+        // 2. City/Location Filter
         if (filters.has("city") && !filters.optString("city").trim().isEmpty()) {
-            baseQuery.append(" AND (LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
             String cityLike = "%" + filters.getString("city").toLowerCase() + "%";
+            baseQuery.append(" AND (LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
             params.add(cityLike);
             params.add(cityLike);
         }
 
-        // Hotel Type filter
-        if (filters.has("hoteltype") && !filters.optString("hoteltype").trim().isEmpty()) {
+        // 3. Hotel Type (Fixed Casing Mismatch)
+        String hTypeKey = filters.has("hotelType") ? "hotelType" : "hoteltype";
+        if (filters.has(hTypeKey) && !filters.optString(hTypeKey).isEmpty()) {
             baseQuery.append(" AND LOWER(Hotel_Type) = ?");
-            params.add(filters.getString("hotelType").toLowerCase());
+            params.add(filters.getString(hTypeKey).toLowerCase());
         }
 
-        // Room Type filter
-        if (filters.has("roomType") && !filters.optString("roomType").trim().isEmpty()) {
-            baseQuery.append(" AND LOWER(Room_Type) = ?");
-            params.add(filters.getString("roomType").toLowerCase());
-        }
-
-        // Price Range filter
-        if (filters.has("minPrice") && filters.has("maxPrice")) {
-            double minPrice = filters.getDouble("minPrice");
-            double maxPrice = filters.getDouble("maxPrice");
-            baseQuery.append(
-                    " AND (CAST(REPLACE(REPLACE(Room_Price,'₹',''),',','') AS DECIMAL(10,2)) BETWEEN ? AND ?)"
-            );
-            params.add(minPrice);
-            params.add(maxPrice);
-        }
-
-        // Rating filter (numeric)
-        if (filters.has("rating")) {
-            double rating = filters.getDouble("rating");
-            baseQuery.append(" AND Rating >= ?");
-            params.add(rating);
-        }
-
-        // Amenities filter: expects JSON array of strings
-        if (filters.has("amenities")) {
-            try {
-                org.json.JSONArray amenities = filters.getJSONArray("amenities");
-                for (int i = 0; i < amenities.length(); i++) {
-                    baseQuery.append(" AND LOWER(Amenities) LIKE ?");
-                    params.add("%" + amenities.getString(i).toLowerCase() + "%");
-                }
-            } catch (Exception ignored) {
-            }
-        }
-
-        // Partner ID / Hotel ID
-        if (filters.has("partnerId") && !filters.optString("partnerId").isEmpty()) {
-            baseQuery.append(" AND Partner_ID = ?");
-            params.add(filters.getString("partnerId"));
-        }
-        if (filters.has("hotelId") && !filters.optString("hotelId").isEmpty()) {
-            baseQuery.append(" AND Hotel_ID = ?");
-            params.add(filters.getString("hotelId"));
-        }
-
-        // Available rooms only (optional)
-        if (filters.has("availableOnly") && filters.optBoolean("availableOnly", false)) {
-            baseQuery.append(" AND Available_Rooms > 0");
-        }
-
-        // Customization filter (optional)
-        if (filters.has("customization")) {
-            String cust = filters.optString("customization");
-            if (!cust.isEmpty()) {
-                baseQuery.append(" AND Customization = ?");
-                params.add(cust);
-            }
-        }
-
-        // Status active only
-        baseQuery.append(" AND Status = 'Active'");
-
-        // Sorting
+        // 4. Sorting Logic
         String orderClause = "";
-        if (sortBy != null) {
+        if (sortBy != null && !sortBy.isEmpty()) {
             switch (sortBy) {
                 case "price_lowest":
                     orderClause = " ORDER BY CAST(REPLACE(REPLACE(Room_Price,'₹',''),',','') AS DECIMAL(10,2)) ASC";
@@ -166,12 +112,10 @@ public class AppFilterHandler implements HttpHandler {
                 case "top_rated":
                     orderClause = " ORDER BY Rating DESC";
                     break;
-                default:
-                    orderClause = "";
             }
         }
 
-        String finalQuery = baseQuery.toString() + orderClause + " LIMIT 100"; // limit for performance
+        String finalQuery = baseQuery.toString() + orderClause + " LIMIT 100";
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(finalQuery)) {
@@ -182,20 +126,16 @@ public class AppFilterHandler implements HttpHandler {
 
             ResultSet rs = stmt.executeQuery();
             ResultSetMetaData meta = rs.getMetaData();
-            int columnCount = meta.getColumnCount();
-
             while (rs.next()) {
                 JSONObject hotel = new JSONObject();
-                for (int i = 1; i <= columnCount; i++) {
-                    String column = meta.getColumnLabel(i);
-                    Object value = rs.getObject(column);
-                    if (value == null) hotel.put(column, JSONObject.NULL);
-                    else hotel.put(column, value);
+                for (int i = 1; i <= meta.getColumnCount(); i++) {
+                    String col = meta.getColumnLabel(i);
+                    Object val = rs.getObject(col);
+                    hotel.put(col, val == null ? JSONObject.NULL : val);
                 }
                 hotelsArray.put(hotel);
             }
         }
-
         return hotelsArray;
     }
 
