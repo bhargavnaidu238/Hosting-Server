@@ -7,13 +7,12 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.io.File;
 import java.sql.*;
 import java.util.*;
 
 public class HotelsHandler implements HttpHandler {
 
-	private final DbConfig dbConfig;
+    private final DbConfig dbConfig;
 
     public HotelsHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
@@ -21,6 +20,16 @@ public class HotelsHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        // Add CORS headers for web/mobile compatibility
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
         URI uri = exchange.getRequestURI();
         String path = uri.getPath();
 
@@ -45,15 +54,10 @@ public class HotelsHandler implements HttpHandler {
                 String hotelId = null;
 
                 if (query != null) {
-                    if (query.contains("type=")) {
-                        typeFilter = URLDecoder.decode(query.split("type=")[1].split("&")[0],
-                                StandardCharsets.UTF_8);
-                    }
-                    if (query.contains("hotel_id=")) {
-                        detailsPage = true;
-                        hotelId = URLDecoder.decode(query.split("hotel_id=")[1].split("&")[0],
-                                StandardCharsets.UTF_8);
-                    }
+                    Map<String, String> params = parseQueryParams(query);
+                    typeFilter = params.get("type");
+                    hotelId = params.get("hotel_id");
+                    if (hotelId != null) detailsPage = true;
                 }
 
                 List<Map<String, Object>> hotels = new ArrayList<>();
@@ -90,34 +94,17 @@ public class HotelsHandler implements HttpHandler {
                         for (int i = 1; i <= cols; i++) {
                             String key = meta.getColumnLabel(i);
                             Object val = rs.getObject(i);
-                            row.put(key, val == null ? "" : val.toString());
-                        }
-
-                        // Handle Hotel Images properly
-                        String imgValue = (String) row.get("Hotel_Images");
-                        List<String> imageList = new ArrayList<>();
-                        if (imgValue != null && !imgValue.isEmpty()) {
-                            String[] imageNames = imgValue.split(",");
-                            for (String name : imageNames) {
-                                name = name.trim();
-                                if (!name.startsWith("http")) {
-                                    name = "http://10.0.2.2:8080/hotel_images/" + name;
-                                }
-                                imageList.add(name);
+                            
+                            // Handle Images specially
+                            if ("hotel_images".equalsIgnoreCase(key)) {
+                                row.put("Hotel_Images", buildImageCsv(rs.getString("hotel_images")));
+                            } else {
+                                row.put(key, val == null ? "" : val);
                             }
                         }
-
-                        // Always return full list
-                        row.put("Hotel_Images", imageList);
-
                         hotels.add(row);
                     }
-
                     sendJson(exchange, hotels);
-
-                } catch (SQLException e) {
-                    e.printStackTrace();
-                    sendError(exchange, 500, "Database error: " + e.getMessage());
                 }
                 return;
             }
@@ -127,6 +114,41 @@ public class HotelsHandler implements HttpHandler {
             e.printStackTrace();
             sendError(exchange, 500, "Internal Server Error: " + e.getMessage());
         }
+    }
+
+    /**
+     * FIXED: This helper ensures that all images are returned as a single 
+     * COMMA-SEPARATED STRING, which matches your Flutter split logic.
+     */
+    private String buildImageCsv(String raw) {
+        if (raw == null || raw.isBlank()) return "";
+        
+        String[] parts = raw.split(",");
+        List<String> fixedUrls = new ArrayList<>();
+        
+        for (String p : parts) {
+            String t = p.trim();
+            if (t.isEmpty()) continue;
+            
+            if (t.toLowerCase().startsWith("http")) {
+                fixedUrls.add(t);
+            } else {
+                // Prepend local server path for local images
+                fixedUrls.add("http://10.0.2.2:8080/hotel_images/" + t);
+            }
+        }
+        return String.join(",", fixedUrls);
+    }
+
+    private Map<String, String> parseQueryParams(String query) {
+        Map<String, String> params = new HashMap<>();
+        for (String param : query.split("&")) {
+            String[] pair = param.split("=");
+            if (pair.length > 1) {
+                params.put(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8));
+            }
+        }
+        return params;
     }
 
     private void serveImage(HttpExchange exchange, String fileName) throws IOException {
@@ -176,19 +198,8 @@ public class HotelsHandler implements HttpHandler {
             sb.append("{");
             int j = 0;
             for (var e : m.entrySet()) {
-                sb.append("\"").append(escape(e.getKey())).append("\":");
-                Object val = e.getValue();
-                if (val instanceof List) {
-                    sb.append("[");
-                    List<?> l = (List<?>) val;
-                    for (int k = 0; k < l.size(); k++) {
-                        sb.append("\"").append(escape(String.valueOf(l.get(k)))).append("\"");
-                        if (k < l.size() - 1) sb.append(",");
-                    }
-                    sb.append("]");
-                } else {
-                    sb.append("\"").append(escape(String.valueOf(val))).append("\"");
-                }
+                sb.append("\"").append(escape(e.getKey())).append("\":\"");
+                sb.append(escape(String.valueOf(e.getValue()))).append("\"");
                 if (j++ < m.size() - 1) sb.append(",");
             }
             sb.append("}");
@@ -200,6 +211,6 @@ public class HotelsHandler implements HttpHandler {
 
     private String escape(String s) {
         if (s == null) return "";
-        return s.replace("\"", "\\\"").replace("\n", " ").replace("\r", " ");
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ");
     }
 }
