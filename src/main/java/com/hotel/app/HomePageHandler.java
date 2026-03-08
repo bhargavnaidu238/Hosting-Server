@@ -16,15 +16,18 @@ public class HomePageHandler implements HttpHandler {
     private final DbConfig dbConfig;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // ✅ Inject DbConfig
     public HomePageHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
     }
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-
         addCorsHeaders(exchange);
+
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
 
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
             sendJsonResponse(exchange, 405, "{\"error\":\"Only GET allowed\"}");
@@ -141,20 +144,18 @@ public class HomePageHandler implements HttpHandler {
                     hotel.put("customization", rs.getString("Customization"));
                     hotel.put("status", rs.getString("Status"));
 
-                    hotel.put("Hotel_Images",
-                            buildImageList(rs.getString("hotel_images")));
+                    // FIXED: Return as a comma-separated string to match Flutter's expectations
+                    hotel.put("Hotel_Images", buildImageString(rs.getString("hotel_images")));
 
                     hotels.add(hotel);
                 }
             }
 
-            sendJsonResponse(exchange, 200,
-                    objectMapper.writeValueAsString(hotels));
+            sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(hotels));
 
         } catch (Exception e) {
             e.printStackTrace();
-            sendJsonResponse(exchange, 500,
-                    "{\"error\":\"Internal error\"}");
+            sendJsonResponse(exchange, 500, "{\"error\":\"Internal error\"}");
         }
     }
 
@@ -207,7 +208,7 @@ public class HomePageHandler implements HttpHandler {
                 while (rs.next()) {
                     Map<String, Object> pg = new LinkedHashMap<>();
 
-                    pg.put("pg_id", rs.getString("pg_id"));
+                    pg.put("pd_id", rs.getString("pd_id"));
                     pg.put("partner_id", rs.getString("partner_id"));
                     pg.put("pg_name", rs.getString("pg_name"));
                     pg.put("pg_type", rs.getString("pg_type"));
@@ -217,13 +218,11 @@ public class HomePageHandler implements HttpHandler {
                     pg.put("state", rs.getString("state"));
                     pg.put("country", rs.getString("country"));
                     pg.put("pincode", rs.getString("pincode"));
-
                     pg.put("total_single_sharing_rooms", rs.getObject("total_single_sharing_rooms"));
                     pg.put("total_double_sharing_rooms", rs.getObject("total_double_sharing_rooms"));
-                    pg.put("total_four_sharing_rooms", rs.getObject("total_four_sharing_rooms"));
+                    pg.put("total_three_sharing_rooms", rs.getObject("total_three_sharing_rooms"));
                     pg.put("total_four_sharing_rooms", rs.getObject("total_four_sharing_rooms"));
                     pg.put("total_five_sharing_rooms", rs.getObject("total_five_sharing_rooms"));
-
                     pg.put("hotel_location", rs.getString("hotel_location"));
                     pg.put("available_rooms", rs.getObject("available_rooms"));
                     pg.put("room_price", rs.getObject("room_price"));
@@ -234,39 +233,49 @@ public class HomePageHandler implements HttpHandler {
                     pg.put("pg_contact", rs.getString("pg_contact"));
                     pg.put("about_this_pg", rs.getString("about_this_pg"));
                     pg.put("status", rs.getString("status"));
-                    pg.put("pg_images", buildImageList(rs.getString("pg_images")));
+
+                    // FIXED: Return as a comma-separated string
+                    pg.put("pg_images", buildImageString(rs.getString("pg_images")));
 
                     pgs.add(pg);
                 }
             }
 
-            sendJsonResponse(exchange, 200,
-                    objectMapper.writeValueAsString(pgs));
+            sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(pgs));
 
         } catch (Exception e) {
             e.printStackTrace();
-            sendJsonResponse(exchange, 500,
-                    "{\"error\":\"Internal error\"}");
+            sendJsonResponse(exchange, 500, "{\"error\":\"Internal error\"}");
         }
     }
 
     // =================== HELPERS ===================
-    private List<String> buildImageList(String raw) {
-        List<String> list = new ArrayList<>();
-        if (raw == null || raw.isBlank()) return list;
+    
+    /**
+     * FIXED: Processes the raw database string and returns a single comma-separated 
+     * string of full URLs. This ensures Supabase links remain untouched while 
+     * local paths get the correct prefix.
+     */
+    private String buildImageString(String raw) {
+        if (raw == null || raw.isBlank()) return "";
 
-        for (String p : raw.split(",")) {
+        List<String> processedList = new ArrayList<>();
+        String[] parts = raw.split(",");
+
+        for (String p : parts) {
             String t = p.trim();
             if (t.isEmpty()) continue;
 
-            if (t.startsWith("http://") || t.startsWith("https://")) {
-                list.add(t);
+            if (t.toLowerCase().startsWith("http://") || t.toLowerCase().startsWith("https://")) {
+                processedList.add(t);
             } else {
-                list.add(dbConfig.getImageBaseUrl()
-                        + t.replaceAll("^/+", ""));
+                // Prepend base URL for local storage images
+                String baseUrl = dbConfig.getImageBaseUrl();
+                if (!baseUrl.endsWith("/")) baseUrl += "/";
+                processedList.add(baseUrl + t.replaceAll("^/+", ""));
             }
         }
-        return list;
+        return String.join(",", processedList);
     }
 
     private void addCorsHeaders(HttpExchange exchange) {
@@ -277,7 +286,6 @@ public class HomePageHandler implements HttpHandler {
 
     private void sendJsonResponse(HttpExchange exchange, int status, String json)
             throws IOException {
-
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(status, bytes.length);
