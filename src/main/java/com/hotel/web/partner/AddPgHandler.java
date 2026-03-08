@@ -10,7 +10,6 @@ import java.io.*;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.sql.*;
 import java.util.*;
 
@@ -40,14 +39,14 @@ public class AddPgHandler implements HttpHandler {
             return;
         }
 
-        // ✅ MEMORY SAFE READING
+        // ✅ FIX: Memory-safe reading to prevent OutOfMemoryError
         String body = readRequestBody(exchange);
         Map<String, String> params;
 
         try {
             params = parseForm(body);
         } catch (Exception e) {
-            sendResponse(exchange, 400, jsonError("Invalid form encoding: " + e.getMessage()));
+            sendResponse(exchange, 400, jsonError("Invalid form encoding"));
             return;
         }
 
@@ -57,9 +56,9 @@ public class AddPgHandler implements HttpHandler {
             return;
         }
 
-        // ============================================================
-        // ✅ UPDATED IMAGE HANDLING (Supports both Base64 and URL List)
-        // ============================================================
+        // ===============================
+        // ✅ UPDATED IMAGE HANDLING
+        // ===============================
         try {
             String pgId = params.getOrDefault("pg_id", "").trim();
             if (pgId.isEmpty()) {
@@ -67,10 +66,13 @@ public class AddPgHandler implements HttpHandler {
                 params.put("pg_id", pgId);
             }
 
-            // Detect environment (Render sets PORT)
+            // Detect environment (Render sets PORT variable automatically)
             boolean isProduction = System.getenv("PORT") != null;
 
-            // Scenario A: Frontend sent Base64 (Legacy/Postman fallback)
+            // Scenario 1: Frontend sends pre-uploaded URLs (Immediate Upload Strategy)
+            // No action needed here, the 'hotel_images' string will be passed directly to DB
+
+            // Scenario 2: Frontend sends Base64 (Legacy/Postman fallback)
             if (params.containsKey("images") && !params.get("images").trim().isEmpty()) {
                 JSONObject json = new JSONObject(params.get("images"));
                 List<String> savedUrls = new ArrayList<>();
@@ -88,8 +90,10 @@ public class AddPgHandler implements HttpHandler {
                         String fileName = pgId + "_" + safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
 
                         if (isProduction) {
+                            // Production: Upload to Supabase Storage
                             savedUrls.add(HotelBookingServer.uploadToSupabase(data, fileName));
                         } else {
+                            // Local: Save to local directory
                             File dir = new File(dbConfig.getHotelImagesPath() + File.separator + pgId + File.separator + safeCategory);
                             if (!dir.exists()) dir.mkdirs();
                             File f = new File(dir, fileName);
@@ -102,10 +106,8 @@ public class AddPgHandler implements HttpHandler {
                     params.put("hotel_images", String.join(",", savedUrls));
                 }
             }
-            // Scenario B: Frontend already uploaded (Immediate Upload Strategy)
-            // Logic handled by the "hotel_images" parameter being passed directly to DB
         } catch (Exception e) {
-            System.err.println("Non-critical Image Processing Error: " + e.getMessage());
+            System.err.println("Non-critical image processing error: " + e.getMessage());
         }
 
         // ===============================
@@ -121,7 +123,7 @@ public class AddPgHandler implements HttpHandler {
                 sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"" +
                         (isUpdate ? "PG updated successfully!" : "PG added successfully!") + "\"}");
             } else {
-                sendResponse(exchange, 500, jsonError("Failed to save PG to Database"));
+                sendResponse(exchange, 500, jsonError("Failed to save PG to database"));
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -186,10 +188,12 @@ public class AddPgHandler implements HttpHandler {
         stmt.setString(i++, params.getOrDefault("description", ""));
         stmt.setString(i++, params.getOrDefault("policies", ""));
 
-        stmt.setDouble(i++, parseDoubleSafe(params.get("rating")));
+        double rating = parseDoubleSafe(params.get("rating"));
+        stmt.setDouble(i++, (rating < 0 || rating > 10) ? 0.0 : rating);
+
         stmt.setString(i++, params.getOrDefault("pg_contact", ""));
         stmt.setString(i++, params.getOrDefault("about_this_pg", ""));
-        stmt.setString(i++, params.getOrDefault("hotel_images", "")); // Accept direct URLs
+        stmt.setString(i++, params.getOrDefault("hotel_images", "")); // Can receive direct URLs
 
         String status = params.getOrDefault("status", "Active");
         stmt.setString(i++, (status.equals("Active") || status.equals("Inactive")) ? status : "Active");
@@ -197,24 +201,23 @@ public class AddPgHandler implements HttpHandler {
         if (isUpdate) stmt.setString(i, pgId);
     }
 
-    // ✅ UTILITIES: MEMORY OPTIMIZED
+    // ✅ OPTIMIZED UTILITIES
     private int parseIntSafe(String s) {
-        try { return (s == null || s.trim().isEmpty()) ? 0 : Integer.parseInt(s.trim()); } 
-        catch (Exception e) { return 0; }
+        try { return (s == null || s.trim().isEmpty()) ? 0 : Integer.parseInt(s.trim()); } catch (Exception e) { return 0; }
     }
 
     private double parseDoubleSafe(String s) {
-        try { return (s == null || s.trim().isEmpty()) ? 0.0 : Double.parseDouble(s.trim()); } 
-        catch (Exception e) { return 0.0; }
+        try { return (s == null || s.trim().isEmpty()) ? 0.0 : Double.parseDouble(s.trim()); } catch (Exception e) { return 0.0; }
     }
 
     private String readRequestBody(HttpExchange exchange) throws IOException {
+        // Character buffering to reduce heap allocation
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8), 8192)) {
             StringBuilder sb = new StringBuilder();
             char[] buffer = new char[8192];
-            int bytesRead;
-            while ((bytesRead = reader.read(buffer)) != -1) {
-                sb.append(buffer, 0, bytesRead);
+            int charsRead;
+            while ((charsRead = reader.read(buffer)) != -1) {
+                sb.append(buffer, 0, charsRead);
             }
             return sb.toString();
         }

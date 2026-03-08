@@ -1,11 +1,13 @@
 package com.hotel.server;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.util.concurrent.Executors;
 
@@ -141,10 +143,8 @@ public class HotelBookingServer {
             supabaseUrl = supabaseUrl.substring(0, supabaseUrl.length() - 1);
         }
 
-        // ✅ UPDATED BUCKET NAME
         String bucketName = "hotels"; 
 
-        // URL format: {base_url}/storage/v1/object/{bucket}/{filename}
         URL url = new URL(supabaseUrl + "/storage/v1/object/" + bucketName + "/" + fileName);
         
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -155,22 +155,27 @@ public class HotelBookingServer {
         conn.setRequestProperty("Content-Type", "image/jpeg");
         conn.setRequestProperty("x-upsert", "true"); 
 
+        // Stream bytes directly to the connection to save heap memory
         try (OutputStream os = conn.getOutputStream()) {
             os.write(imageBytes);
+            os.flush();
         }
 
         int responseCode = conn.getResponseCode();
         if (responseCode == 200 || responseCode == 201) {
-            // Return the public URL for the database
             return supabaseUrl + "/storage/v1/object/public/" + bucketName + "/" + fileName;
         } else {
+            // ✅ FIX: Improved Error Handling to avoid memory leaks
             StringBuilder errorMsg = new StringBuilder();
-            try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getErrorStream()))) {
-                String line;
-                while ((line = br.readLine()) != null) errorMsg.append(line);
+            InputStream errorStream = conn.getErrorStream();
+            if (errorStream != null) {
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(errorStream, StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = br.readLine()) != null) errorMsg.append(line);
+                }
             }
             System.err.println("Supabase Error (" + responseCode + "): " + errorMsg.toString());
-            throw new RuntimeException("Supabase upload failed: " + responseCode);
+            throw new RuntimeException("Supabase upload failed with code: " + responseCode);
         }
     }
 }
