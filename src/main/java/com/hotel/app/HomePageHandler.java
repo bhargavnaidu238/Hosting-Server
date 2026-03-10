@@ -49,51 +49,67 @@ public class HomePageHandler implements HttpHandler {
                 
                 if ("type".equalsIgnoreCase(key)) {
                     hotelType = value.trim();
-                } else if ("query".equalsIgnoreCase(key) || "q".equalsIgnoreCase(key)) {
+                } else if ("query".equalsIgnoreCase(key) || "q".equalsIgnoreCase(key) || "searchQuery".equalsIgnoreCase(key)) {
                     searchQuery = value.trim();
                 }
             }
         }
 
-        // --- SMART ROUTING FIX ---
-        // If the user used the search bar, 'searchQuery' will contain the text.
-        if (searchQuery != null && (hotelType == null || hotelType.isBlank())) {
-            String input = searchQuery.toLowerCase().trim();
-            List<String> categories = Arrays.asList("hotel", "resort", "lodge", "pg", "payingguest");
-            
-            // Normalize: "Hotels" -> "hotel"
-            String singularInput = (input.endsWith("s") && input.length() > 3) 
-                                   ? input.substring(0, input.length() - 1) 
-                                   : input;
-
-            if (categories.contains(singularInput)) {
-                hotelType = singularInput;
-                searchQuery = null; // Show all for this category
-            }
-            // else: Keep as searchQuery to find specific hotel name
-        }
-
-        // Standardize the type for the router
         String normalizedType = (hotelType == null) ? "" : hotelType.replaceAll("[_\\-\\s]", "").toLowerCase();
 
-        if (normalizedType.equals("payingguest") || normalizedType.equals("pg")) {
+        // ROUTING LOGIC
+        if (searchQuery != null && !searchQuery.isBlank() && normalizedType.isEmpty()) {
+            handleGlobalSearch(exchange, searchQuery);
+        } else if (normalizedType.equals("payingguest") || normalizedType.equals("pg")) {
             handlePayingGuestRequest(exchange, searchQuery);
         } else {
             handleHotelRequest(exchange, hotelType, searchQuery);
         }
     }
 
+    private void handleGlobalSearch(HttpExchange exchange, String searchQuery) throws IOException {
+        try {
+            List<Map<String, Object>> results = new ArrayList<>();
+            results.addAll(getHotelsData(null, searchQuery));
+            results.addAll(getPGData(searchQuery));
+            sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(results));
+        } catch (SQLException e) {
+            e.printStackTrace();
+            sendJsonResponse(exchange, 500, "{\"error\":\"Database error: " + e.getMessage() + "\"}");
+        }
+    }
+
+    // --- FIXED: Explicitly defined handleHotelRequest ---
     private void handleHotelRequest(HttpExchange exchange, String hotelType, String searchQuery) throws IOException {
-        List<Map<String, Object>> hotels = new ArrayList<>();
-        
-        // Base Query
+        try {
+            List<Map<String, Object>> hotels = getHotelsData(hotelType, searchQuery);
+            sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(hotels));
+        } catch (SQLException e) {
+            e.printStackTrace();
+            sendJsonResponse(exchange, 500, "{\"error\":\"Database error in hotels\"}");
+        }
+    }
+
+    // --- FIXED: Explicitly defined handlePayingGuestRequest ---
+    private void handlePayingGuestRequest(HttpExchange exchange, String searchQuery) throws IOException {
+        try {
+            List<Map<String, Object>> pgs = getPGData(searchQuery);
+            sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(pgs));
+        } catch (SQLException e) {
+            e.printStackTrace();
+            sendJsonResponse(exchange, 500, "{\"error\":\"Database error in PGs\"}");
+        }
+    }
+
+    private List<Map<String, Object>> getHotelsData(String hotelType, String searchQuery) throws SQLException {
+        List<Map<String, Object>> list = new ArrayList<>();
         StringBuilder sql = new StringBuilder("SELECT * FROM hotels_info WHERE status = 'Active'");
 
         if (hotelType != null && !hotelType.isBlank()) {
             sql.append(" AND LOWER(hotel_type) = ?");
         }
         if (searchQuery != null && !searchQuery.isBlank()) {
-            sql.append(" AND (LOWER(hotel_name) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
+            sql.append(" AND (LOWER(hotel_name) LIKE ? OR LOWER(hotel_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -105,38 +121,33 @@ public class HomePageHandler implements HttpHandler {
             }
             if (searchQuery != null && !searchQuery.isBlank()) {
                 String p = "%" + searchQuery.toLowerCase() + "%";
-                for (int i = 0; i < 4; i++) stmt.setString(idx++, p);
+                for (int i = 0; i < 5; i++) stmt.setString(idx++, p);
             }
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    Map<String, Object> hotel = new LinkedHashMap<>();
-                    // Explicitly use lowercase keys to prevent Flutter mapping errors
-                    hotel.put("hotel_id", rs.getString("hotel_id"));
-                    hotel.put("hotel_name", rs.getString("hotel_name"));
-                    hotel.put("hotel_type", rs.getString("hotel_type"));
-                    hotel.put("address", rs.getString("address"));
-                    hotel.put("city", rs.getString("city"));
-                    hotel.put("room_price", rs.getObject("room_price"));
-                    hotel.put("rating", rs.getObject("rating"));
-                    hotel.put("hotel_images", buildImageString(rs.getString("hotel_images")));
-                    hotel.put("status", rs.getString("status"));
-                    hotels.add(hotel);
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("hotel_id", rs.getString("hotel_id"));
+                    item.put("hotel_name", rs.getString("hotel_name"));
+                    item.put("hotel_type", rs.getString("hotel_type"));
+                    item.put("city", rs.getString("city"));
+                    item.put("state", rs.getString("state"));
+                    item.put("room_price", rs.getObject("room_price"));
+                    item.put("hotel_images", buildImageString(rs.getString("hotel_images")));
+                    item.put("category", "hotel");
+                    list.add(item);
                 }
             }
-            sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(hotels));
-        } catch (Exception e) {
-            e.printStackTrace();
-            sendJsonResponse(exchange, 500, "{\"error\":\"Database connection error\"}");
         }
+        return list;
     }
 
-    private void handlePayingGuestRequest(HttpExchange exchange, String searchQuery) throws IOException {
-        List<Map<String, Object>> pgs = new ArrayList<>();
+    private List<Map<String, Object>> getPGData(String searchQuery) throws SQLException {
+        List<Map<String, Object>> list = new ArrayList<>();
         StringBuilder sql = new StringBuilder("SELECT * FROM paying_guest_info WHERE status = 'Active'");
 
         if (searchQuery != null && !searchQuery.isBlank()) {
-            sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(city) LIKE ?)");
+            sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(pg_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -144,24 +155,25 @@ public class HomePageHandler implements HttpHandler {
             
             if (searchQuery != null && !searchQuery.isBlank()) {
                 String p = "%" + searchQuery.toLowerCase() + "%";
-                stmt.setString(1, p);
-                stmt.setString(2, p);
+                for (int i = 1; i <= 5; i++) stmt.setString(i, p);
             }
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    Map<String, Object> pg = new LinkedHashMap<>();
-                    pg.put("pg_name", rs.getString("pg_name"));
-                    pg.put("city", rs.getString("city"));
-                    pg.put("room_price", rs.getObject("room_price"));
-                    pg.put("pg_images", buildImageString(rs.getString("pg_images")));
-                    pgs.add(pg);
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("id", rs.getString("id"));
+                    item.put("pg_name", rs.getString("pg_name"));
+                    item.put("pg_type", rs.getString("pg_type"));
+                    item.put("city", rs.getString("city"));
+                    item.put("state", rs.getString("state"));
+                    item.put("room_price", rs.getObject("room_price"));
+                    item.put("pg_images", buildImageString(rs.getString("pg_images")));
+                    item.put("category", "pg");
+                    list.add(item);
                 }
             }
-            sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(pgs));
-        } catch (Exception e) {
-            sendJsonResponse(exchange, 500, "{\"error\":\"Internal error\"}");
         }
+        return list;
     }
 
     private String buildImageString(String raw) {

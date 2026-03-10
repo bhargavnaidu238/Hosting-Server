@@ -51,11 +51,11 @@ public class AppFilterHandler implements HttpHandler {
             }
 
             JSONObject requestJson = new JSONObject(bodyStr);
-            // Support both flat and nested filter structures
             JSONObject filters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
             String sortBy = requestJson.optString("sortBy", filters.optString("sortBy", ""));
 
-            JSONArray result = fetchHotelsWithFilters(filters, sortBy);
+            // FETCH LOGIC
+            JSONArray result = fetchDataWithFilters(filters, sortBy);
             sendJsonResponse(exchange, result.toString(), 200);
 
         } catch (Exception e) {
@@ -64,76 +64,89 @@ public class AppFilterHandler implements HttpHandler {
         }
     }
 
-    private JSONArray fetchHotelsWithFilters(JSONObject filters, String sortBy) throws SQLException {
-        JSONArray hotelsArray = new JSONArray();
-        StringBuilder baseQuery = new StringBuilder("SELECT * FROM hotels_info WHERE Status = 'Active'");
-        List<Object> params = new ArrayList<>();
+    private JSONArray fetchDataWithFilters(JSONObject filters, String sortBy) throws SQLException {
+        JSONArray combinedResults = new JSONArray();
 
-        // 1. Inputs
         String hotelType = filters.optString("hotelType", filters.optString("hoteltype", "")).trim();
         String searchQuery = filters.optString("searchQuery", "").trim();
-
-        // 2. Strict Category Normalization (The Fix)
-        // We only strip 's' if it matches a known category. 
-        // This prevents "Marriotts" from becoming "Marriott" incorrectly if it's a name search.
-        List<String> validCategories = Arrays.asList("hotel", "resort", "lodge", "pg", "payingguest");
-        
-        if (!searchQuery.isEmpty() && hotelType.isEmpty()) {
-            String input = searchQuery.toLowerCase();
-            String singularInput = (input.endsWith("s") && input.length() > 3) 
-                                   ? input.substring(0, input.length() - 1) 
-                                   : input;
-
-            if (validCategories.contains(singularInput)) {
-                hotelType = singularInput;
-                searchQuery = ""; // Effectively shifts query to category filter
-            }
-        }
-
-        // Apply Category Filter (Normalized)
-        if (!hotelType.isEmpty()) {
-            String cleanType = hotelType.toLowerCase();
-            if (cleanType.endsWith("s") && validCategories.contains(cleanType.substring(0, cleanType.length() -1))) {
-                cleanType = cleanType.substring(0, cleanType.length() - 1);
-            }
-            baseQuery.append(" AND LOWER(Hotel_Type) = ?");
-            params.add(cleanType);
-        }
-
-        // 3. Keyword Search (Hotel Name, City, or State)
-        if (!searchQuery.isEmpty()) {
-            String query = "%" + searchQuery.toLowerCase() + "%";
-            baseQuery.append(" AND (LOWER(Hotel_Name) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
-            params.add(query); params.add(query); params.add(query);
-        }
-
-        // 4. Explicit City Filter
         String city = filters.optString("city", "").trim();
+
+        // Strict Category Normalization
+        List<String> validHotelCategories = Arrays.asList("hotel", "resort", "lodge", "villa", "dormitory");
+        List<String> validPgCategories = Arrays.asList("pg", "payingguest");
+        
+        String input = searchQuery.toLowerCase();
+        String singularInput = (input.endsWith("s") && input.length() > 3) ? input.substring(0, input.length() - 1) : input;
+
+        // Routing logic based on search text or explicit type
+        boolean searchHotels = true;
+        boolean searchPGs = true;
+
+        if (validHotelCategories.contains(singularInput) || validHotelCategories.contains(hotelType.toLowerCase())) {
+            searchPGs = false;
+        } else if (validPgCategories.contains(singularInput) || validPgCategories.contains(hotelType.toLowerCase())) {
+            searchHotels = false;
+        }
+
+        // 1. Fetch Hotels
+        if (searchHotels) {
+            combinedResults.putAll(getFilteredData("hotels_info", "Hotel_Name", "Hotel_Type", filters, sortBy));
+        }
+
+        // 2. Fetch PGs
+        if (searchPGs) {
+            combinedResults.putAll(getFilteredData("paying_guest_info", "pg_name", "pg_type", filters, sortBy));
+        }
+
+        return combinedResults;
+    }
+
+    private JSONArray getFilteredData(String tableName, String nameCol, String typeCol, JSONObject filters, String sortBy) throws SQLException {
+        JSONArray dataArray = new JSONArray();
+        List<Object> params = new ArrayList<>();
+        
+        StringBuilder query = new StringBuilder("SELECT * FROM " + tableName + " WHERE Status = 'Active'");
+
+        String hotelType = filters.optString("hotelType", filters.optString("hoteltype", "")).trim();
+        String searchQuery = filters.optString("searchQuery", "").trim();
+        String city = filters.optString("city", "").trim();
+
+        // Type Filter
+        if (!hotelType.isEmpty() && !hotelType.equalsIgnoreCase("all")) {
+            query.append(" AND LOWER(" + typeCol + ") = ?");
+            params.add(hotelType.toLowerCase());
+        }
+
+        // Keyword Search (Name, Type, City, State, Country)
+        if (!searchQuery.isEmpty()) {
+            String p = "%" + searchQuery.toLowerCase() + "%";
+            query.append(" AND (LOWER(" + nameCol + ") LIKE ? OR LOWER(" + typeCol + ") LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
+            for (int i = 0; i < 5; i++) params.add(p);
+        }
+
+        // Explicit City Filter
         if (!city.isEmpty()) {
-            baseQuery.append(" AND LOWER(city) = ?");
+            query.append(" AND LOWER(city) = ?");
             params.add(city.toLowerCase());
         }
 
-        // 5. Sorting Logic
-        String orderClause = "";
+        // Sorting
         if (!sortBy.isEmpty() && !sortBy.equals("none")) {
             switch (sortBy) {
                 case "price_lowest":
-                    orderClause = " ORDER BY CAST(REPLACE(REPLACE(Room_Price,'₹',''),',','') AS DECIMAL(10,2)) ASC";
+                    query.append(" ORDER BY CAST(REPLACE(REPLACE(Room_Price,'₹',''),',','') AS DECIMAL(10,2)) ASC");
                     break;
                 case "price_highest":
-                    orderClause = " ORDER BY CAST(REPLACE(REPLACE(Room_Price,'₹',''),',','') AS DECIMAL(10,2)) DESC";
+                    query.append(" ORDER BY CAST(REPLACE(REPLACE(Room_Price,'₹',''),',','') AS DECIMAL(10,2)) DESC");
                     break;
                 case "top_rated":
-                    orderClause = " ORDER BY Rating DESC";
+                    query.append(" ORDER BY Rating DESC");
                     break;
             }
         }
 
-        String finalQuery = baseQuery.toString() + orderClause + " LIMIT 100";
-
-        try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
-             PreparedStatement stmt = conn.prepareStatement(finalQuery)) {
+        try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
+             PreparedStatement stmt = conn.prepareStatement(query.toString())) {
 
             for (int i = 0; i < params.size(); i++) {
                 stmt.setObject(i + 1, params.get(i));
@@ -142,21 +155,21 @@ public class AppFilterHandler implements HttpHandler {
             ResultSet rs = stmt.executeQuery();
             ResultSetMetaData meta = rs.getMetaData();
             while (rs.next()) {
-                JSONObject hotel = new JSONObject();
+                JSONObject obj = new JSONObject();
                 for (int i = 1; i <= meta.getColumnCount(); i++) {
                     String col = meta.getColumnLabel(i);
-                    Object val = rs.getObject(col);
-                    hotel.put(col, val == null ? JSONObject.NULL : val);
+                    obj.put(col.toLowerCase(), rs.getObject(col));
                 }
-                hotelsArray.put(hotel);
+                obj.put("category_type", tableName.contains("hotel") ? "hotel" : "pg");
+                dataArray.put(obj);
             }
         }
-        return hotelsArray;
+        return dataArray;
     }
 
     private void addCorsHeaders(HttpExchange exchange) {
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "POST, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization");
     }
 
