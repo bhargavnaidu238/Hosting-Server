@@ -51,10 +51,11 @@ public class AppFilterHandler implements HttpHandler {
             }
 
             JSONObject requestJson = new JSONObject(bodyStr);
+            
+            // Supporting both nested "filters" and flat structure from Flutter
             JSONObject filters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
-            String sortBy = requestJson.optString("sortBy", filters.optString("sortBy", ""));
+            String sortBy = requestJson.optString("sortBy", filters.optString("sortBy", "none"));
 
-            // FETCH LOGIC
             JSONArray result = fetchDataWithFilters(filters, sortBy);
             sendJsonResponse(exchange, result.toString(), 200);
 
@@ -67,33 +68,34 @@ public class AppFilterHandler implements HttpHandler {
     private JSONArray fetchDataWithFilters(JSONObject filters, String sortBy) throws SQLException {
         JSONArray combinedResults = new JSONArray();
 
-        String hotelType = filters.optString("hotelType", filters.optString("hoteltype", "")).trim();
-        String searchQuery = filters.optString("searchQuery", "").trim();
-        String city = filters.optString("city", "").trim();
+        String hotelType = filters.optString("type", filters.optString("hotelType", "")).trim();
+        String searchQuery = filters.optString("query", filters.optString("searchQuery", "")).trim();
 
-        // Strict Category Normalization
         List<String> validHotelCategories = Arrays.asList("hotel", "resort", "lodge", "villa", "dormitory");
         List<String> validPgCategories = Arrays.asList("pg", "payingguest");
         
         String input = searchQuery.toLowerCase();
         String singularInput = (input.endsWith("s") && input.length() > 3) ? input.substring(0, input.length() - 1) : input;
 
-        // Routing logic based on search text or explicit type
         boolean searchHotels = true;
         boolean searchPGs = true;
 
-        if (validHotelCategories.contains(singularInput) || validHotelCategories.contains(hotelType.toLowerCase())) {
+        // Restriction logic based on explicit type or search keyword
+        if (!hotelType.isEmpty() && !hotelType.equalsIgnoreCase("all")) {
+            if (validPgCategories.contains(hotelType.toLowerCase())) {
+                searchHotels = false;
+            } else {
+                searchPGs = false;
+            }
+        } else if (validHotelCategories.contains(singularInput)) {
             searchPGs = false;
-        } else if (validPgCategories.contains(singularInput) || validPgCategories.contains(hotelType.toLowerCase())) {
+        } else if (validPgCategories.contains(singularInput)) {
             searchHotels = false;
         }
 
-        // 1. Fetch Hotels
         if (searchHotels) {
-            combinedResults.putAll(getFilteredData("hotels_info", "Hotel_Name", "Hotel_Type", filters, sortBy));
+            combinedResults.putAll(getFilteredData("hotels_info", "hotel_name", "hotel_type", filters, sortBy));
         }
-
-        // 2. Fetch PGs
         if (searchPGs) {
             combinedResults.putAll(getFilteredData("paying_guest_info", "pg_name", "pg_type", filters, sortBy));
         }
@@ -105,42 +107,60 @@ public class AppFilterHandler implements HttpHandler {
         JSONArray dataArray = new JSONArray();
         List<Object> params = new ArrayList<>();
         
-        StringBuilder query = new StringBuilder("SELECT * FROM " + tableName + " WHERE Status = 'Active'");
+        // Base Query
+        StringBuilder query = new StringBuilder("SELECT * FROM " + tableName + " WHERE status = 'Active'");
 
-        String hotelType = filters.optString("hotelType", filters.optString("hoteltype", "")).trim();
-        String searchQuery = filters.optString("searchQuery", "").trim();
+        String hotelType = filters.optString("type", "").trim();
+        String searchQuery = filters.optString("query", "").trim();
         String city = filters.optString("city", "").trim();
 
-        // Type Filter
-        if (!hotelType.isEmpty() && !hotelType.equalsIgnoreCase("all")) {
-            query.append(" AND LOWER(" + typeCol + ") = ?");
-            params.add(hotelType.toLowerCase());
-        }
-
-        // Keyword Search (Name, Type, City, State, Country)
+        // 1. Name/Type/Location Search (The Search Bar)
         if (!searchQuery.isEmpty()) {
+            query.append(" AND (LOWER(").append(nameCol).append(") LIKE ? OR LOWER(").append(typeCol)
+                 .append(") LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
             String p = "%" + searchQuery.toLowerCase() + "%";
-            query.append(" AND (LOWER(" + nameCol + ") LIKE ? OR LOWER(" + typeCol + ") LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
-            for (int i = 0; i < 5; i++) params.add(p);
+            for (int i = 0; i < 4; i++) params.add(p);
         }
 
-        // Explicit City Filter
+        // 2. City Filtering (From Device Location or Manual Selector)
         if (!city.isEmpty()) {
-            query.append(" AND LOWER(city) = ?");
-            params.add(city.toLowerCase());
+            query.append(" AND LOWER(city) LIKE ?");
+            params.add("%" + city.toLowerCase() + "%");
         }
 
-        // Sorting
+        // 3. Price Range Filter (Accurate handling of min and max)
+        double minPrice = filters.optDouble("minPrice", 0);
+        double maxPrice = filters.optDouble("maxPrice", 0);
+
+        // Logic to clean the room_price string and cast to numeric for accurate range comparison
+        String numericPriceSql = "CAST(REPLACE(REPLACE(" + tableName + ".room_price, '₹', ''), ',', '') AS DECIMAL(10,2))";
+
+        if (minPrice > 0) {
+            query.append(" AND ").append(numericPriceSql).append(" >= ?");
+            params.add(minPrice);
+        }
+        if (maxPrice > 0) {
+            query.append(" AND ").append(numericPriceSql).append(" <= ?");
+            params.add(maxPrice);
+        }
+
+        // 4. Rating Filter
+        if (filters.has("rating") && filters.getDouble("rating") > 0) {
+            query.append(" AND rating >= ?");
+            params.add(filters.getDouble("rating"));
+        }
+
+        // 5. Sorting Logic
         if (!sortBy.isEmpty() && !sortBy.equals("none")) {
             switch (sortBy) {
                 case "price_lowest":
-                    query.append(" ORDER BY CAST(REPLACE(REPLACE(Room_Price,'₹',''),',','') AS DECIMAL(10,2)) ASC");
+                    query.append(" ORDER BY ").append(numericPriceSql).append(" ASC");
                     break;
                 case "price_highest":
-                    query.append(" ORDER BY CAST(REPLACE(REPLACE(Room_Price,'₹',''),',','') AS DECIMAL(10,2)) DESC");
+                    query.append(" ORDER BY ").append(numericPriceSql).append(" DESC");
                     break;
                 case "top_rated":
-                    query.append(" ORDER BY Rating DESC");
+                    query.append(" ORDER BY rating DESC");
                     break;
             }
         }
@@ -157,10 +177,22 @@ public class AppFilterHandler implements HttpHandler {
             while (rs.next()) {
                 JSONObject obj = new JSONObject();
                 for (int i = 1; i <= meta.getColumnCount(); i++) {
-                    String col = meta.getColumnLabel(i);
-                    obj.put(col.toLowerCase(), rs.getObject(col));
+                    String col = meta.getColumnLabel(i).toLowerCase();
+                    Object val = rs.getObject(i);
+                    obj.put(col, val == null ? JSONObject.NULL : val);
                 }
-                obj.put("category_type", tableName.contains("hotel") ? "hotel" : "pg");
+                
+                // Map disparate column names to unified keys for Flutter UI consistency
+                if (tableName.equals("paying_guest_info")) {
+                    obj.put("display_name", rs.getString("pg_name"));
+                    obj.put("display_type", rs.getString("pg_type"));
+                    obj.put("category_tag", "PG");
+                } else {
+                    obj.put("display_name", rs.getString("hotel_name"));
+                    obj.put("display_type", rs.getString("hotel_type"));
+                    obj.put("category_tag", "Hotel");
+                }
+                
                 dataArray.put(obj);
             }
         }

@@ -57,54 +57,57 @@ public class HomePageHandler implements HttpHandler {
 
         String normalizedType = (hotelType == null) ? "" : hotelType.replaceAll("[_\\-\\s]", "").toLowerCase();
 
-        // --- IMPROVED ROUTING LOGIC ---
+        // ROUTING LOGIC
+        if (searchQuery != null && !searchQuery.isBlank() && normalizedType.isEmpty()) {
+            handleGlobalSearch(exchange, searchQuery);
+        } else if (normalizedType.equals("payingguest") || normalizedType.equals("pg")) {
+            handlePayingGuestRequest(exchange, searchQuery);
+        } else {
+            handleHotelRequest(exchange, hotelType, searchQuery);
+        }
+    }
+
+    private void handleGlobalSearch(HttpExchange exchange, String searchQuery) throws IOException {
         try {
             List<Map<String, Object>> results = new ArrayList<>();
-
-            // 1. If user typed in search bar AND no specific category was clicked (Landing on page via search)
-            if (searchQuery != null && !searchQuery.isBlank() && (hotelType == null || hotelType.isBlank() || hotelType.equalsIgnoreCase("all"))) {
-                results.addAll(getHotelsData(null, searchQuery));
-                results.addAll(getPGData(searchQuery));
-            } 
-            // 2. If user specifically clicked "Paying Guests" category
-            else if (normalizedType.equals("payingguest") || normalizedType.equals("pg")) {
-                results.addAll(getPGData(searchQuery));
-            } 
-            // 3. If user clicked a specific Hotel category (Hotels, Resorts, etc.) or just "all"
-            else {
-                results.addAll(getHotelsData(hotelType, searchQuery));
-            }
-
+            results.addAll(getHotelsData(null, searchQuery));
+            results.addAll(getPGData(searchQuery));
             sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(results));
-
         } catch (SQLException e) {
             e.printStackTrace();
             sendJsonResponse(exchange, 500, "{\"error\":\"Database error: " + e.getMessage() + "\"}");
         }
     }
 
-    private void handleGlobalSearch(HttpExchange exchange, String searchQuery) throws IOException {
-        // This method is now integrated into handle() to prevent Unhandled SQLException errors
-    }
-
+    // --- FIXED: Explicitly defined handleHotelRequest ---
     private void handleHotelRequest(HttpExchange exchange, String hotelType, String searchQuery) throws IOException {
-        // This method is now integrated into handle() to prevent Unhandled SQLException errors
+        try {
+            List<Map<String, Object>> hotels = getHotelsData(hotelType, searchQuery);
+            sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(hotels));
+        } catch (SQLException e) {
+            e.printStackTrace();
+            sendJsonResponse(exchange, 500, "{\"error\":\"Database error in hotels\"}");
+        }
     }
 
+    // --- FIXED: Explicitly defined handlePayingGuestRequest ---
     private void handlePayingGuestRequest(HttpExchange exchange, String searchQuery) throws IOException {
-        // This method is now integrated into handle() to prevent Unhandled SQLException errors
+        try {
+            List<Map<String, Object>> pgs = getPGData(searchQuery);
+            sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(pgs));
+        } catch (SQLException e) {
+            e.printStackTrace();
+            sendJsonResponse(exchange, 500, "{\"error\":\"Database error in PGs\"}");
+        }
     }
 
     private List<Map<String, Object>> getHotelsData(String hotelType, String searchQuery) throws SQLException {
         List<Map<String, Object>> list = new ArrayList<>();
         StringBuilder sql = new StringBuilder("SELECT * FROM hotels_info WHERE status = 'Active'");
 
-        // Apply type filter if specifically requested (e.g. from a category card)
-        if (hotelType != null && !hotelType.isBlank() && !hotelType.equalsIgnoreCase("all")) {
+        if (hotelType != null && !hotelType.isBlank()) {
             sql.append(" AND LOWER(hotel_type) = ?");
         }
-        
-        // Apply keyword search across all required columns
         if (searchQuery != null && !searchQuery.isBlank()) {
             sql.append(" AND (LOWER(hotel_name) LIKE ? OR LOWER(hotel_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
         }
@@ -113,7 +116,7 @@ public class HomePageHandler implements HttpHandler {
              PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
 
             int idx = 1;
-            if (hotelType != null && !hotelType.isBlank() && !hotelType.equalsIgnoreCase("all")) {
+            if (hotelType != null && !hotelType.isBlank()) {
                 stmt.setString(idx++, hotelType.toLowerCase());
             }
             if (searchQuery != null && !searchQuery.isBlank()) {
@@ -129,7 +132,6 @@ public class HomePageHandler implements HttpHandler {
                     item.put("hotel_type", rs.getString("hotel_type"));
                     item.put("city", rs.getString("city"));
                     item.put("state", rs.getString("state"));
-                    item.put("country", rs.getString("country"));
                     item.put("room_price", rs.getObject("room_price"));
                     item.put("hotel_images", buildImageString(rs.getString("hotel_images")));
                     item.put("category", "hotel");
@@ -144,7 +146,6 @@ public class HomePageHandler implements HttpHandler {
         List<Map<String, Object>> list = new ArrayList<>();
         StringBuilder sql = new StringBuilder("SELECT * FROM paying_guest_info WHERE status = 'Active'");
 
-        // Search across all required columns for PG table
         if (searchQuery != null && !searchQuery.isBlank()) {
             sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(pg_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
         }
@@ -165,7 +166,6 @@ public class HomePageHandler implements HttpHandler {
                     item.put("pg_type", rs.getString("pg_type"));
                     item.put("city", rs.getString("city"));
                     item.put("state", rs.getString("state"));
-                    item.put("country", rs.getString("country"));
                     item.put("room_price", rs.getObject("room_price"));
                     item.put("pg_images", buildImageString(rs.getString("pg_images")));
                     item.put("category", "pg");
