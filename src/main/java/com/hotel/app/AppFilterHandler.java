@@ -9,6 +9,7 @@ import java.io.*;
 import java.sql.*;
 import java.util.*;
 import java.nio.charset.StandardCharsets;
+import java.net.URLDecoder;
 
 public class AppFilterHandler implements HttpHandler {
 
@@ -22,40 +23,61 @@ public class AppFilterHandler implements HttpHandler {
     public void handle(HttpExchange exchange) throws IOException {
         addCorsHeaders(exchange);
         
-        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+        String method = exchange.getRequestMethod();
+
+        if ("OPTIONS".equalsIgnoreCase(method)) {
             exchange.sendResponseHeaders(204, -1);
             return;
         }
 
-        if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+        // FIX: Allow both GET (for location detection) and POST (for filters)
+        if ("POST".equalsIgnoreCase(method) || "GET".equalsIgnoreCase(method)) {
             handleFilterRequest(exchange);
         } else {
-            sendResponse(exchange, "Only POST method is supported", 405);
+            sendResponse(exchange, "Method Not Supported", 405);
         }
     }
 
     private void handleFilterRequest(HttpExchange exchange) throws IOException {
-        try (InputStreamReader isr = new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8);
-             BufferedReader br = new BufferedReader(isr)) {
+        try {
+            JSONObject filters = new JSONObject();
+            String sortBy = "none";
 
-            StringBuilder requestBody = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) {
-                requestBody.append(line);
+            // 1. Handle GET Query Parameters (e.g., ?city=Bengaluru)
+            String queryParams = exchange.getRequestURI().getRawQuery();
+            if (queryParams != null) {
+                for (String param : queryParams.split("&")) {
+                    String[] pair = param.split("=");
+                    if (pair.length > 1) {
+                        filters.put(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8.toString()));
+                    }
+                }
             }
 
-            String bodyStr = requestBody.toString().trim();
-            if (bodyStr.isEmpty()) {
-                sendJsonResponse(exchange, new JSONArray().toString(), 200);
-                return;
+            // 2. Handle POST JSON Body (Advanced Filters)
+            if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                StringBuilder requestBody = new StringBuilder();
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        requestBody.append(line);
+                    }
+                }
+                
+                String bodyStr = requestBody.toString().trim();
+                if (!bodyStr.isEmpty()) {
+                    JSONObject requestJson = new JSONObject(bodyStr);
+                    JSONObject bodyFilters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
+                    
+                    // Merge POST filters into the existing filter object
+                    for (String key : bodyFilters.keySet()) {
+                        filters.put(key, bodyFilters.get(key));
+                    }
+                    sortBy = requestJson.optString("sortBy", filters.optString("sortBy", "none"));
+                }
             }
 
-            JSONObject requestJson = new JSONObject(bodyStr);
-            
-            // Supporting both nested "filters" and flat structure from Flutter
-            JSONObject filters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
-            String sortBy = requestJson.optString("sortBy", filters.optString("sortBy", "none"));
-
+            // Execute unified search
             JSONArray result = fetchDataWithFilters(filters, sortBy);
             sendJsonResponse(exchange, result.toString(), 200);
 
@@ -80,7 +102,6 @@ public class AppFilterHandler implements HttpHandler {
         boolean searchHotels = true;
         boolean searchPGs = true;
 
-        // Restriction logic based on explicit type or search keyword
         if (!hotelType.isEmpty() && !hotelType.equalsIgnoreCase("all")) {
             if (validPgCategories.contains(hotelType.toLowerCase())) {
                 searchHotels = false;
@@ -107,14 +128,12 @@ public class AppFilterHandler implements HttpHandler {
         JSONArray dataArray = new JSONArray();
         List<Object> params = new ArrayList<>();
         
-        // Base Query
         StringBuilder query = new StringBuilder("SELECT * FROM " + tableName + " WHERE status = 'Active'");
 
-        String hotelType = filters.optString("type", "").trim();
-        String searchQuery = filters.optString("query", "").trim();
+        String searchQuery = filters.optString("query", filters.optString("searchQuery", "")).trim();
         String city = filters.optString("city", "").trim();
 
-        // 1. Name/Type/Location Search (The Search Bar)
+        // 1. Search Bar Logic
         if (!searchQuery.isEmpty()) {
             query.append(" AND (LOWER(").append(nameCol).append(") LIKE ? OR LOWER(").append(typeCol)
                  .append(") LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
@@ -122,18 +141,17 @@ public class AppFilterHandler implements HttpHandler {
             for (int i = 0; i < 4; i++) params.add(p);
         }
 
-        // 2. City Filtering (From Device Location or Manual Selector)
+        // 2. Exact City Logic (Triggered by GPS or Selector)
         if (!city.isEmpty()) {
-            query.append(" AND LOWER(city) LIKE ?");
+            query.append(" AND (LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
+            params.add("%" + city.toLowerCase() + "%");
             params.add("%" + city.toLowerCase() + "%");
         }
 
-        // 3. Price Range Filter (Accurate handling of min and max)
+        // 3. Price Filters
         double minPrice = filters.optDouble("minPrice", 0);
         double maxPrice = filters.optDouble("maxPrice", 0);
-
-        // Logic to clean the room_price string and cast to numeric for accurate range comparison
-        String numericPriceSql = "CAST(REPLACE(REPLACE(" + tableName + ".room_price, '₹', ''), ',', '') AS DECIMAL(10,2))";
+        String numericPriceSql = "CAST(REPLACE(REPLACE(room_price, '₹', ''), ',', '') AS DECIMAL(10,2))";
 
         if (minPrice > 0) {
             query.append(" AND ").append(numericPriceSql).append(" >= ?");
@@ -144,24 +162,18 @@ public class AppFilterHandler implements HttpHandler {
             params.add(maxPrice);
         }
 
-        // 4. Rating Filter
+        // 4. Rating
         if (filters.has("rating") && filters.getDouble("rating") > 0) {
             query.append(" AND rating >= ?");
             params.add(filters.getDouble("rating"));
         }
 
-        // 5. Sorting Logic
+        // 5. Sorting
         if (!sortBy.isEmpty() && !sortBy.equals("none")) {
             switch (sortBy) {
-                case "price_lowest":
-                    query.append(" ORDER BY ").append(numericPriceSql).append(" ASC");
-                    break;
-                case "price_highest":
-                    query.append(" ORDER BY ").append(numericPriceSql).append(" DESC");
-                    break;
-                case "top_rated":
-                    query.append(" ORDER BY rating DESC");
-                    break;
+                case "price_lowest": query.append(" ORDER BY ").append(numericPriceSql).append(" ASC"); break;
+                case "price_highest": query.append(" ORDER BY ").append(numericPriceSql).append(" DESC"); break;
+                case "top_rated": query.append(" ORDER BY rating DESC"); break;
             }
         }
 
@@ -182,7 +194,7 @@ public class AppFilterHandler implements HttpHandler {
                     obj.put(col, val == null ? JSONObject.NULL : val);
                 }
                 
-                // Map disparate column names to unified keys for Flutter UI consistency
+                // Unify Display Keys
                 if (tableName.equals("paying_guest_info")) {
                     obj.put("display_name", rs.getString("pg_name"));
                     obj.put("display_type", rs.getString("pg_type"));
@@ -192,7 +204,6 @@ public class AppFilterHandler implements HttpHandler {
                     obj.put("display_type", rs.getString("hotel_type"));
                     obj.put("category_tag", "Hotel");
                 }
-                
                 dataArray.put(obj);
             }
         }
@@ -201,7 +212,7 @@ public class AppFilterHandler implements HttpHandler {
 
     private void addCorsHeaders(HttpExchange exchange) {
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "POST, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization");
     }
 
@@ -209,16 +220,12 @@ public class AppFilterHandler implements HttpHandler {
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
         byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(statusCode, bytes.length);
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(bytes);
-        }
+        try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
     }
 
     private void sendResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
         byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(statusCode, bytes.length);
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(bytes);
-        }
+        try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
     }
 }
