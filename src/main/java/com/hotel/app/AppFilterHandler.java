@@ -8,18 +8,25 @@ import org.json.JSONObject;
 import java.io.*;
 import java.sql.*;
 import java.util.*;
+import java.nio.charset.StandardCharsets;
 
 public class AppFilterHandler implements HttpHandler {
 
-	private final DbConfig dbConfig;
+    private final DbConfig dbConfig;
 
-    // ✅ Inject DbConfig via constructor
     public AppFilterHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
     }
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        addCorsHeaders(exchange);
+        
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
         if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
             handleFilterRequest(exchange);
         } else {
@@ -28,7 +35,7 @@ public class AppFilterHandler implements HttpHandler {
     }
 
     private void handleFilterRequest(HttpExchange exchange) throws IOException {
-        try (InputStreamReader isr = new InputStreamReader(exchange.getRequestBody(), "utf-8");
+        try (InputStreamReader isr = new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8);
              BufferedReader br = new BufferedReader(isr)) {
 
             StringBuilder requestBody = new StringBuilder();
@@ -44,23 +51,8 @@ public class AppFilterHandler implements HttpHandler {
             }
 
             JSONObject requestJson = new JSONObject(bodyStr);
-
-            // New frontend sends: { "type": "...", "filters": {...}, "sortBy": "price_lowest" }
-            JSONObject filters;
-            String sortBy = "";
-
-            if (requestJson.has("filters")) {
-                filters = requestJson.getJSONObject("filters");
-            } else {
-                // Backward-compat: the client may have sent filters at top-level
-                filters = requestJson;
-            }
-
-            if (requestJson.has("sortBy")) {
-                sortBy = requestJson.getString("sortBy");
-            } else if (filters.has("sortBy")) {
-                sortBy = filters.getString("sortBy");
-            }
+            JSONObject filters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
+            String sortBy = requestJson.optString("sortBy", filters.optString("sortBy", ""));
 
             JSONArray result = fetchHotelsWithFilters(filters, sortBy);
             sendJsonResponse(exchange, result.toString(), 200);
@@ -73,35 +65,57 @@ public class AppFilterHandler implements HttpHandler {
 
     private JSONArray fetchHotelsWithFilters(JSONObject filters, String sortBy) throws SQLException {
         JSONArray hotelsArray = new JSONArray();
-        // Start with a clean base query
         StringBuilder baseQuery = new StringBuilder("SELECT * FROM hotels_info WHERE Status = 'Active'");
         List<Object> params = new ArrayList<>();
 
-        // 1. Keyword Search (Fixes Search Bar)
-        if (filters.has("searchQuery") && !filters.optString("searchQuery").isEmpty()) {
-            String query = "%" + filters.getString("searchQuery").toLowerCase() + "%";
-            baseQuery.append(" AND (LOWER(Hotel_Name) LIKE ? OR LOWER(city) LIKE ? OR LOWER(Area) LIKE ?)");
+        // 1. Category & Plural Normalization (Fixes "extra s" issue)
+        String hotelType = filters.optString("hotelType", filters.optString("hoteltype", "")).trim();
+        String searchQuery = filters.optString("searchQuery", "").trim();
+
+        // If user searched via the main bar, detect if it's a category
+        if (!searchQuery.isEmpty() && hotelType.isEmpty()) {
+            String input = searchQuery.toLowerCase();
+            List<String> validCategories = Arrays.asList("hotel", "resort", "lodge", "pg", "payingguest");
+            
+            // Handle plurals: "hotels" -> "hotel"
+            String singularInput = (input.endsWith("s") && input.length() > 3) 
+                                   ? input.substring(0, input.length() - 1) 
+                                   : input;
+
+            if (validCategories.contains(singularInput)) {
+                hotelType = singularInput; // Convert search into a category filter
+                searchQuery = "";          // Clear search query so we show all hotels
+            }
+        }
+
+        // Apply Normalized Hotel Type Filter
+        if (!hotelType.isEmpty()) {
+            // Final check to ensure "hotels" doesn't hit DB as "hotels"
+            String finalType = (hotelType.toLowerCase().endsWith("s") && hotelType.length() > 3) 
+                               ? hotelType.substring(0, hotelType.length() - 1) 
+                               : hotelType;
+            
+            baseQuery.append(" AND LOWER(Hotel_Type) = ?");
+            params.add(finalType.toLowerCase());
+        }
+
+        // 2. Keyword Search for Specific Names or Locations
+        if (!searchQuery.isEmpty()) {
+            String query = "%" + searchQuery.toLowerCase() + "%";
+            baseQuery.append(" AND (LOWER(Hotel_Name) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
             params.add(query); params.add(query); params.add(query);
         }
 
-        // 2. City/Location Filter
-        if (filters.has("city") && !filters.optString("city").trim().isEmpty()) {
-            String cityLike = "%" + filters.getString("city").toLowerCase() + "%";
-            baseQuery.append(" AND (LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
-            params.add(cityLike);
-            params.add(cityLike);
-        }
-
-        // 3. Hotel Type (Fixed Casing Mismatch)
-        String hTypeKey = filters.has("hotelType") ? "hotelType" : "hoteltype";
-        if (filters.has(hTypeKey) && !filters.optString(hTypeKey).isEmpty()) {
-            baseQuery.append(" AND LOWER(Hotel_Type) = ?");
-            params.add(filters.getString(hTypeKey).toLowerCase());
+        // 3. Explicit City Filter (if passed separately)
+        String city = filters.optString("city", "").trim();
+        if (!city.isEmpty()) {
+            baseQuery.append(" AND LOWER(city) = ?");
+            params.add(city.toLowerCase());
         }
 
         // 4. Sorting Logic
         String orderClause = "";
-        if (sortBy != null && !sortBy.isEmpty()) {
+        if (!sortBy.isEmpty()) {
             switch (sortBy) {
                 case "price_lowest":
                     orderClause = " ORDER BY CAST(REPLACE(REPLACE(Room_Price,'₹',''),',','') AS DECIMAL(10,2)) ASC";
@@ -139,9 +153,15 @@ public class AppFilterHandler implements HttpHandler {
         return hotelsArray;
     }
 
+    private void addCorsHeaders(HttpExchange exchange) {
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    }
+
     private void sendJsonResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
-        byte[] bytes = response.getBytes("UTF-8");
+        byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
@@ -149,7 +169,7 @@ public class AppFilterHandler implements HttpHandler {
     }
 
     private void sendResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
-        byte[] bytes = response.getBytes("UTF-8");
+        byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);

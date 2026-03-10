@@ -55,63 +55,45 @@ public class HomePageHandler implements HttpHandler {
             }
         }
 
-        // --- THE FIX: SMART ROUTING ---
-        // If we only have a searchQuery (from the Flutter search bar), 
-        // determine if it's a CATEGORY or a NAME.
-        if (searchQuery != null && hotelType == null) {
+        // --- SMART ROUTING FIX ---
+        // If the user used the search bar, 'searchQuery' will contain the text.
+        if (searchQuery != null && (hotelType == null || hotelType.isBlank())) {
             String input = searchQuery.toLowerCase().trim();
             List<String> categories = Arrays.asList("hotel", "resort", "lodge", "pg", "payingguest");
             
-            // Check for plural versions
+            // Normalize: "Hotels" -> "hotel"
             String singularInput = (input.endsWith("s") && input.length() > 3) 
                                    ? input.substring(0, input.length() - 1) 
                                    : input;
 
             if (categories.contains(singularInput)) {
-                // Scenario 1: User searched for a category (e.g., "Hotels" or "Resort")
                 hotelType = singularInput;
-                searchQuery = null; // Clear query so we show ALL of that category
-            } else {
-                // Scenario 2: User searched for a specific name (e.g., "Grand Hyatt")
-                // Keep searchQuery as is, hotelType remains null
+                searchQuery = null; // Show all for this category
             }
+            // else: Keep as searchQuery to find specific hotel name
         }
 
+        // Standardize the type for the router
         String normalizedType = (hotelType == null) ? "" : hotelType.replaceAll("[_\\-\\s]", "").toLowerCase();
 
-        if ("payingguest".equals(normalizedType) || "pg".equals(normalizedType)) {
+        if (normalizedType.equals("payingguest") || normalizedType.equals("pg")) {
             handlePayingGuestRequest(exchange, searchQuery);
-            return;
+        } else {
+            handleHotelRequest(exchange, hotelType, searchQuery);
         }
-
-        handleHotelRequest(exchange, hotelType, searchQuery);
     }
 
     private void handleHotelRequest(HttpExchange exchange, String hotelType, String searchQuery) throws IOException {
         List<Map<String, Object>> hotels = new ArrayList<>();
-        String baseSql = """
-            SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type,
-                   address, city, state, country, pincode, hotel_location,
-                   total_rooms, available_rooms, room_Price, amenities,
-                   description, policies, rating, hotel_contact,
-                   about_this_property, hotel_images, customization, status
-            FROM hotels_info
-            WHERE status = 'Active'
-            """;
+        
+        // Base Query
+        StringBuilder sql = new StringBuilder("SELECT * FROM hotels_info WHERE status = 'Active'");
 
-        StringBuilder sql = new StringBuilder(baseSql);
         if (hotelType != null && !hotelType.isBlank()) {
             sql.append(" AND LOWER(hotel_type) = ?");
         }
         if (searchQuery != null && !searchQuery.isBlank()) {
-            sql.append("""
-                AND (
-                    LOWER(hotel_name) LIKE ?
-                    OR LOWER(city) LIKE ?
-                    OR LOWER(state) LIKE ?
-                    OR LOWER(country) LIKE ?
-                )
-            """);
+            sql.append(" AND (LOWER(hotel_name) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -129,27 +111,29 @@ public class HomePageHandler implements HttpHandler {
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     Map<String, Object> hotel = new LinkedHashMap<>();
+                    // Explicitly use lowercase keys to prevent Flutter mapping errors
                     hotel.put("hotel_id", rs.getString("hotel_id"));
                     hotel.put("hotel_name", rs.getString("hotel_name"));
                     hotel.put("hotel_type", rs.getString("hotel_type"));
+                    hotel.put("address", rs.getString("address"));
                     hotel.put("city", rs.getString("city"));
                     hotel.put("room_price", rs.getObject("room_price"));
+                    hotel.put("rating", rs.getObject("rating"));
                     hotel.put("hotel_images", buildImageString(rs.getString("hotel_images")));
-                    // ... (Add other fields as needed for your UI)
+                    hotel.put("status", rs.getString("status"));
                     hotels.add(hotel);
                 }
             }
             sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(hotels));
         } catch (Exception e) {
             e.printStackTrace();
-            sendJsonResponse(exchange, 500, "{\"error\":\"Internal error\"}");
+            sendJsonResponse(exchange, 500, "{\"error\":\"Database connection error\"}");
         }
     }
 
     private void handlePayingGuestRequest(HttpExchange exchange, String searchQuery) throws IOException {
         List<Map<String, Object>> pgs = new ArrayList<>();
-        String baseSql = "SELECT * FROM paying_guest_info WHERE status = 'Active'";
-        StringBuilder sql = new StringBuilder(baseSql);
+        StringBuilder sql = new StringBuilder("SELECT * FROM paying_guest_info WHERE status = 'Active'");
 
         if (searchQuery != null && !searchQuery.isBlank()) {
             sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(city) LIKE ?)");
@@ -157,15 +141,19 @@ public class HomePageHandler implements HttpHandler {
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
+            
             if (searchQuery != null && !searchQuery.isBlank()) {
                 String p = "%" + searchQuery.toLowerCase() + "%";
                 stmt.setString(1, p);
                 stmt.setString(2, p);
             }
+
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     Map<String, Object> pg = new LinkedHashMap<>();
                     pg.put("pg_name", rs.getString("pg_name"));
+                    pg.put("city", rs.getString("city"));
+                    pg.put("room_price", rs.getObject("room_price"));
                     pg.put("pg_images", buildImageString(rs.getString("pg_images")));
                     pgs.add(pg);
                 }
@@ -183,8 +171,9 @@ public class HomePageHandler implements HttpHandler {
         for (String p : parts) {
             String t = p.trim();
             if (t.isEmpty()) continue;
-            if (t.toLowerCase().startsWith("http")) processedList.add(t);
-            else {
+            if (t.toLowerCase().startsWith("http")) {
+                processedList.add(t);
+            } else {
                 String baseUrl = dbConfig.getImageBaseUrl();
                 if (!baseUrl.endsWith("/")) baseUrl += "/";
                 processedList.add(baseUrl + t.replaceAll("^/+", ""));

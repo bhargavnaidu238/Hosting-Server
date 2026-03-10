@@ -65,8 +65,8 @@ public class PgsHandler implements HttpHandler {
                             Object val = rs.getObject(i);
                             
                             // Process PG_Images into a CSV string of full URLs
-                            if ("PG_Images".equalsIgnoreCase(key)) {
-                                row.put("PG_Images", buildImageCsv(rs.getString("PG_Images")));
+                            if ("pg_images".equalsIgnoreCase(key)) {
+                                row.put("pg_images", buildImageCsv(rs.getString("pg_images")));
                             } else {
                                 row.put(key, val == null ? "" : val.toString());
                             }
