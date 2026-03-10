@@ -51,6 +51,7 @@ public class AppFilterHandler implements HttpHandler {
             }
 
             JSONObject requestJson = new JSONObject(bodyStr);
+            // Support both flat and nested filter structures
             JSONObject filters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
             String sortBy = requestJson.optString("sortBy", filters.optString("sortBy", ""));
 
@@ -68,54 +69,54 @@ public class AppFilterHandler implements HttpHandler {
         StringBuilder baseQuery = new StringBuilder("SELECT * FROM hotels_info WHERE Status = 'Active'");
         List<Object> params = new ArrayList<>();
 
-        // 1. Category & Plural Normalization (Fixes "extra s" issue)
+        // 1. Inputs
         String hotelType = filters.optString("hotelType", filters.optString("hoteltype", "")).trim();
         String searchQuery = filters.optString("searchQuery", "").trim();
 
-        // If user searched via the main bar, detect if it's a category
+        // 2. Strict Category Normalization (The Fix)
+        // We only strip 's' if it matches a known category. 
+        // This prevents "Marriotts" from becoming "Marriott" incorrectly if it's a name search.
+        List<String> validCategories = Arrays.asList("hotel", "resort", "lodge", "pg", "payingguest");
+        
         if (!searchQuery.isEmpty() && hotelType.isEmpty()) {
             String input = searchQuery.toLowerCase();
-            List<String> validCategories = Arrays.asList("hotel", "resort", "lodge", "pg", "payingguest");
-            
-            // Handle plurals: "hotels" -> "hotel"
             String singularInput = (input.endsWith("s") && input.length() > 3) 
                                    ? input.substring(0, input.length() - 1) 
                                    : input;
 
             if (validCategories.contains(singularInput)) {
-                hotelType = singularInput; // Convert search into a category filter
-                searchQuery = "";          // Clear search query so we show all hotels
+                hotelType = singularInput;
+                searchQuery = ""; // Effectively shifts query to category filter
             }
         }
 
-        // Apply Normalized Hotel Type Filter
+        // Apply Category Filter (Normalized)
         if (!hotelType.isEmpty()) {
-            // Final check to ensure "hotels" doesn't hit DB as "hotels"
-            String finalType = (hotelType.toLowerCase().endsWith("s") && hotelType.length() > 3) 
-                               ? hotelType.substring(0, hotelType.length() - 1) 
-                               : hotelType;
-            
+            String cleanType = hotelType.toLowerCase();
+            if (cleanType.endsWith("s") && validCategories.contains(cleanType.substring(0, cleanType.length() -1))) {
+                cleanType = cleanType.substring(0, cleanType.length() - 1);
+            }
             baseQuery.append(" AND LOWER(Hotel_Type) = ?");
-            params.add(finalType.toLowerCase());
+            params.add(cleanType);
         }
 
-        // 2. Keyword Search for Specific Names or Locations
+        // 3. Keyword Search (Hotel Name, City, or State)
         if (!searchQuery.isEmpty()) {
             String query = "%" + searchQuery.toLowerCase() + "%";
             baseQuery.append(" AND (LOWER(Hotel_Name) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
             params.add(query); params.add(query); params.add(query);
         }
 
-        // 3. Explicit City Filter (if passed separately)
+        // 4. Explicit City Filter
         String city = filters.optString("city", "").trim();
         if (!city.isEmpty()) {
             baseQuery.append(" AND LOWER(city) = ?");
             params.add(city.toLowerCase());
         }
 
-        // 4. Sorting Logic
+        // 5. Sorting Logic
         String orderClause = "";
-        if (!sortBy.isEmpty()) {
+        if (!sortBy.isEmpty() && !sortBy.equals("none")) {
             switch (sortBy) {
                 case "price_lowest":
                     orderClause = " ORDER BY CAST(REPLACE(REPLACE(Room_Price,'₹',''),',','') AS DECIMAL(10,2)) ASC";
