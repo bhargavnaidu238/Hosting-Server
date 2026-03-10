@@ -30,7 +30,7 @@ public class AppFilterHandler implements HttpHandler {
             return;
         }
 
-        // FIX: Allow both GET (for location detection) and POST (for filters)
+        // Supporting both POST (Advanced Filters) and GET (Automatic City Search)
         if ("POST".equalsIgnoreCase(method) || "GET".equalsIgnoreCase(method)) {
             handleFilterRequest(exchange);
         } else {
@@ -43,7 +43,7 @@ public class AppFilterHandler implements HttpHandler {
             JSONObject filters = new JSONObject();
             String sortBy = "none";
 
-            // 1. Handle GET Query Parameters (e.g., ?city=Bengaluru)
+            // 1. Extract parameters from GET request (Query Params)
             String queryParams = exchange.getRequestURI().getRawQuery();
             if (queryParams != null) {
                 for (String param : queryParams.split("&")) {
@@ -54,7 +54,7 @@ public class AppFilterHandler implements HttpHandler {
                 }
             }
 
-            // 2. Handle POST JSON Body (Advanced Filters)
+            // 2. Extract parameters from POST request (JSON Body)
             if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
                 StringBuilder requestBody = new StringBuilder();
                 try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
@@ -67,9 +67,9 @@ public class AppFilterHandler implements HttpHandler {
                 String bodyStr = requestBody.toString().trim();
                 if (!bodyStr.isEmpty()) {
                     JSONObject requestJson = new JSONObject(bodyStr);
+                    // Handle both flat JSON and nested "filters" object
                     JSONObject bodyFilters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
                     
-                    // Merge POST filters into the existing filter object
                     for (String key : bodyFilters.keySet()) {
                         filters.put(key, bodyFilters.get(key));
                     }
@@ -77,7 +77,7 @@ public class AppFilterHandler implements HttpHandler {
                 }
             }
 
-            // Execute unified search
+            // Execute unified data fetch
             JSONArray result = fetchDataWithFilters(filters, sortBy);
             sendJsonResponse(exchange, result.toString(), 200);
 
@@ -133,7 +133,7 @@ public class AppFilterHandler implements HttpHandler {
         String searchQuery = filters.optString("query", filters.optString("searchQuery", "")).trim();
         String city = filters.optString("city", "").trim();
 
-        // 1. Search Bar Logic
+        // 1. Search Bar Logic (Keyword matching)
         if (!searchQuery.isEmpty()) {
             query.append(" AND (LOWER(").append(nameCol).append(") LIKE ? OR LOWER(").append(typeCol)
                  .append(") LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
@@ -141,14 +141,15 @@ public class AppFilterHandler implements HttpHandler {
             for (int i = 0; i < 4; i++) params.add(p);
         }
 
-        // 2. Exact City Logic (Triggered by GPS or Selector)
+        // 2. City Logic (GPS detection or Location Selector)
         if (!city.isEmpty()) {
             query.append(" AND (LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
-            params.add("%" + city.toLowerCase() + "%");
-            params.add("%" + city.toLowerCase() + "%");
+            String c = "%" + city.toLowerCase() + "%";
+            params.add(c);
+            params.add(c);
         }
 
-        // 3. Price Filters
+        // 3. Price Filter Logic
         double minPrice = filters.optDouble("minPrice", 0);
         double maxPrice = filters.optDouble("maxPrice", 0);
         String numericPriceSql = "CAST(REPLACE(REPLACE(room_price, '₹', ''), ',', '') AS DECIMAL(10,2))";
@@ -162,13 +163,13 @@ public class AppFilterHandler implements HttpHandler {
             params.add(maxPrice);
         }
 
-        // 4. Rating
+        // 4. Rating Logic
         if (filters.has("rating") && filters.getDouble("rating") > 0) {
             query.append(" AND rating >= ?");
             params.add(filters.getDouble("rating"));
         }
 
-        // 5. Sorting
+        // 5. Sorting Logic
         if (!sortBy.isEmpty() && !sortBy.equals("none")) {
             switch (sortBy) {
                 case "price_lowest": query.append(" ORDER BY ").append(numericPriceSql).append(" ASC"); break;
@@ -194,7 +195,7 @@ public class AppFilterHandler implements HttpHandler {
                     obj.put(col, val == null ? JSONObject.NULL : val);
                 }
                 
-                // Unify Display Keys
+                // Map disparate column names to unified keys
                 if (tableName.equals("paying_guest_info")) {
                     obj.put("display_name", rs.getString("pg_name"));
                     obj.put("display_type", rs.getString("pg_type"));
