@@ -30,7 +30,6 @@ public class AppFilterHandler implements HttpHandler {
             return;
         }
 
-        // Supporting both POST (Advanced Filters) and GET (Automatic City Search)
         if ("POST".equalsIgnoreCase(method) || "GET".equalsIgnoreCase(method)) {
             handleFilterRequest(exchange);
         } else {
@@ -43,18 +42,18 @@ public class AppFilterHandler implements HttpHandler {
             JSONObject filters = new JSONObject();
             String sortBy = "none";
 
-            // 1. Extract parameters from GET request (Query Params)
+            // 1. Extract parameters from GET request
             String queryParams = exchange.getRequestURI().getRawQuery();
             if (queryParams != null) {
                 for (String param : queryParams.split("&")) {
                     String[] pair = param.split("=");
                     if (pair.length > 1) {
-                        filters.put(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8.toString()));
+                        filters.put(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8.toString()).trim());
                     }
                 }
             }
 
-            // 2. Extract parameters from POST request (JSON Body)
+            // 2. Extract parameters from POST request
             if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
                 StringBuilder requestBody = new StringBuilder();
                 try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
@@ -67,17 +66,20 @@ public class AppFilterHandler implements HttpHandler {
                 String bodyStr = requestBody.toString().trim();
                 if (!bodyStr.isEmpty()) {
                     JSONObject requestJson = new JSONObject(bodyStr);
-                    // Handle both flat JSON and nested "filters" object
                     JSONObject bodyFilters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
                     
                     for (String key : bodyFilters.keySet()) {
-                        filters.put(key, bodyFilters.get(key));
+                        Object val = bodyFilters.get(key);
+                        if (val instanceof String) {
+                            filters.put(key, ((String) val).trim());
+                        } else {
+                            filters.put(key, val);
+                        }
                     }
                     sortBy = requestJson.optString("sortBy", filters.optString("sortBy", "none"));
                 }
             }
 
-            // Execute unified data fetch
             JSONArray result = fetchDataWithFilters(filters, sortBy);
             sendJsonResponse(exchange, result.toString(), 200);
 
@@ -90,28 +92,30 @@ public class AppFilterHandler implements HttpHandler {
     private JSONArray fetchDataWithFilters(JSONObject filters, String sortBy) throws SQLException {
         JSONArray combinedResults = new JSONArray();
 
-        String hotelType = filters.optString("type", filters.optString("hotelType", "")).trim();
-        String searchQuery = filters.optString("query", filters.optString("searchQuery", "")).trim();
+        // Standardize keys
+        String hotelType = filters.optString("type", filters.optString("hotelType", "")).toLowerCase().trim();
+        String searchQuery = filters.optString("searchQuery", filters.optString("query", "")).toLowerCase().trim();
 
-        List<String> validHotelCategories = Arrays.asList("hotel", "resort", "lodge", "villa", "dormitory");
-        List<String> validPgCategories = Arrays.asList("pg", "payingguest");
+        List<String> validHotelCategories = Arrays.asList("hotel", "resort", "lodge", "villa", "dormitory", "hotels", "resorts");
+        List<String> validPgCategories = Arrays.asList("pg", "payingguest", "paying guest", "pgs");
         
-        String input = searchQuery.toLowerCase();
-        String singularInput = (input.endsWith("s") && input.length() > 3) ? input.substring(0, input.length() - 1) : input;
-
         boolean searchHotels = true;
         boolean searchPGs = true;
 
-        if (!hotelType.isEmpty() && !hotelType.equalsIgnoreCase("all")) {
-            if (validPgCategories.contains(hotelType.toLowerCase())) {
+        // Smart Category Detection - Check if user is searching for a specific type
+        if (!hotelType.isEmpty() && !hotelType.equals("all")) {
+            if (validPgCategories.contains(hotelType)) {
                 searchHotels = false;
-            } else {
+            } else if (validHotelCategories.contains(hotelType)) {
                 searchPGs = false;
             }
-        } else if (validHotelCategories.contains(singularInput)) {
-            searchPGs = false;
-        } else if (validPgCategories.contains(singularInput)) {
-            searchHotels = false;
+        } else if (!searchQuery.isEmpty()) {
+            // If the search query itself matches a category exactly (singular or plural)
+            if (validHotelCategories.contains(searchQuery)) {
+                searchPGs = false;
+            } else if (validPgCategories.contains(searchQuery)) {
+                searchHotels = false;
+            }
         }
 
         if (searchHotels) {
@@ -130,26 +134,22 @@ public class AppFilterHandler implements HttpHandler {
         
         StringBuilder query = new StringBuilder("SELECT * FROM " + tableName + " WHERE status = 'Active'");
 
-        String searchQuery = filters.optString("query", filters.optString("searchQuery", "")).trim();
+        String searchQuery = filters.optString("searchQuery", filters.optString("query", "")).trim();
         String city = filters.optString("city", "").trim();
 
-        // 1. Search Bar Logic (Keyword matching)
         if (!searchQuery.isEmpty()) {
             query.append(" AND (LOWER(").append(nameCol).append(") LIKE ? OR LOWER(").append(typeCol)
-                 .append(") LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
+                 .append(") LIKE ? OR LOWER(city) LIKE ? OR LOWER(area) LIKE ?)");
             String p = "%" + searchQuery.toLowerCase() + "%";
             for (int i = 0; i < 4; i++) params.add(p);
         }
 
-        // 2. City Logic (GPS detection or Location Selector)
         if (!city.isEmpty()) {
-            query.append(" AND (LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
-            String c = "%" + city.toLowerCase() + "%";
-            params.add(c);
-            params.add(c);
+            query.append(" AND (LOWER(city) = ? OR LOWER(state) = ?)");
+            params.add(city.toLowerCase());
+            params.add(city.toLowerCase());
         }
 
-        // 3. Price Filter Logic
         double minPrice = filters.optDouble("minPrice", 0);
         double maxPrice = filters.optDouble("maxPrice", 0);
         String numericPriceSql = "CAST(REPLACE(REPLACE(room_price, '₹', ''), ',', '') AS DECIMAL(10,2))";
@@ -163,13 +163,14 @@ public class AppFilterHandler implements HttpHandler {
             params.add(maxPrice);
         }
 
-        // 4. Rating Logic
-        if (filters.has("rating") && filters.getDouble("rating") > 0) {
-            query.append(" AND rating >= ?");
-            params.add(filters.getDouble("rating"));
+        if (filters.has("rating") && !filters.isNull("rating")) {
+            double rating = filters.optDouble("rating", 0);
+            if (rating > 0) {
+                query.append(" AND rating >= ?");
+                params.add(rating);
+            }
         }
 
-        // 5. Sorting Logic
         if (!sortBy.isEmpty() && !sortBy.equals("none")) {
             switch (sortBy) {
                 case "price_lowest": query.append(" ORDER BY ").append(numericPriceSql).append(" ASC"); break;
@@ -195,7 +196,6 @@ public class AppFilterHandler implements HttpHandler {
                     obj.put(col, val == null ? JSONObject.NULL : val);
                 }
                 
-                // Map disparate column names to unified keys
                 if (tableName.equals("paying_guest_info")) {
                     obj.put("display_name", rs.getString("pg_name"));
                     obj.put("display_type", rs.getString("pg_type"));
