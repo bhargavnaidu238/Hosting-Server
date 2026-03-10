@@ -8,76 +8,58 @@ import org.json.JSONObject;
 import java.io.*;
 import java.sql.*;
 import java.util.*;
-import java.nio.charset.StandardCharsets;
-import java.net.URLDecoder;
 
 public class AppFilterHandler implements HttpHandler {
 
-    private final DbConfig dbConfig;
+	private final DbConfig dbConfig;
 
+    // ✅ Inject DbConfig via constructor
     public AppFilterHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
     }
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        addCorsHeaders(exchange);
-        
-        String method = exchange.getRequestMethod();
-
-        if ("OPTIONS".equalsIgnoreCase(method)) {
-            exchange.sendResponseHeaders(204, -1);
-            return;
-        }
-
-        if ("POST".equalsIgnoreCase(method) || "GET".equalsIgnoreCase(method)) {
+        if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
             handleFilterRequest(exchange);
         } else {
-            sendResponse(exchange, "Method Not Supported", 405);
+            sendResponse(exchange, "Only POST method is supported", 405);
         }
     }
 
     private void handleFilterRequest(HttpExchange exchange) throws IOException {
-        try {
-            JSONObject filters = new JSONObject();
-            String sortBy = "none";
+        try (InputStreamReader isr = new InputStreamReader(exchange.getRequestBody(), "utf-8");
+             BufferedReader br = new BufferedReader(isr)) {
 
-            // 1. Extract parameters from GET request
-            String queryParams = exchange.getRequestURI().getRawQuery();
-            if (queryParams != null) {
-                for (String param : queryParams.split("&")) {
-                    String[] pair = param.split("=");
-                    if (pair.length > 1) {
-                        filters.put(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8.toString()).trim());
-                    }
-                }
+            StringBuilder requestBody = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                requestBody.append(line);
             }
 
-            // 2. Extract parameters from POST request
-            if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
-                StringBuilder requestBody = new StringBuilder();
-                try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = br.readLine()) != null) {
-                        requestBody.append(line);
-                    }
-                }
-                
-                String bodyStr = requestBody.toString().trim();
-                if (!bodyStr.isEmpty()) {
-                    JSONObject requestJson = new JSONObject(bodyStr);
-                    JSONObject bodyFilters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
-                    
-                    for (String key : bodyFilters.keySet()) {
-                        Object val = bodyFilters.get(key);
-                        if (val instanceof String) {
-                            filters.put(key, ((String) val).trim());
-                        } else {
-                            filters.put(key, val);
-                        }
-                    }
-                    sortBy = requestJson.optString("sortBy", filters.optString("sortBy", "none"));
-                }
+            String bodyStr = requestBody.toString().trim();
+            if (bodyStr.isEmpty()) {
+                sendJsonResponse(exchange, new JSONArray().toString(), 200);
+                return;
+            }
+
+            JSONObject requestJson = new JSONObject(bodyStr);
+
+            // New frontend sends: { "type": "...", "filters": {...}, "sortBy": "price_lowest" }
+            JSONObject filters;
+            String sortBy = "";
+
+            if (requestJson.has("filters")) {
+                filters = requestJson.getJSONObject("filters");
+            } else {
+                // Backward-compat: the client may have sent filters at top-level
+                filters = requestJson;
+            }
+
+            if (requestJson.has("sortBy")) {
+                sortBy = requestJson.getString("sortBy");
+            } else if (filters.has("sortBy")) {
+                sortBy = filters.getString("sortBy");
             }
 
             JSONArray result = fetchDataWithFilters(filters, sortBy);
@@ -92,35 +74,31 @@ public class AppFilterHandler implements HttpHandler {
     private JSONArray fetchDataWithFilters(JSONObject filters, String sortBy) throws SQLException {
         JSONArray combinedResults = new JSONArray();
 
-        // Standardize keys
+        // Standardize input keys
         String hotelType = filters.optString("type", filters.optString("hotelType", "")).toLowerCase().trim();
         String searchQuery = filters.optString("searchQuery", filters.optString("query", "")).toLowerCase().trim();
 
-        List<String> validHotelCategories = Arrays.asList("hotel", "resort", "lodge", "villa", "dormitory", "hotels", "resorts");
+        // Define categories to decide which tables to hit
+        List<String> validHotelCategories = Arrays.asList("hotel", "resort", "lodge", "villa", "dormitory", "hotels");
         List<String> validPgCategories = Arrays.asList("pg", "payingguest", "paying guest", "pgs");
         
         boolean searchHotels = true;
         boolean searchPGs = true;
 
-        // Smart Category Detection - Check if user is searching for a specific type
+        // Logic to prevent searching everything if a specific type is requested
         if (!hotelType.isEmpty() && !hotelType.equals("all")) {
-            if (validPgCategories.contains(hotelType)) {
-                searchHotels = false;
-            } else if (validHotelCategories.contains(hotelType)) {
-                searchPGs = false;
-            }
+            if (validPgCategories.contains(hotelType)) searchHotels = false;
+            else if (validHotelCategories.contains(hotelType)) searchPGs = false;
         } else if (!searchQuery.isEmpty()) {
-            // If the search query itself matches a category exactly (singular or plural)
-            if (validHotelCategories.contains(searchQuery)) {
-                searchPGs = false;
-            } else if (validPgCategories.contains(searchQuery)) {
-                searchHotels = false;
-            }
+            if (validHotelCategories.contains(searchQuery)) searchPGs = false;
+            else if (validPgCategories.contains(searchQuery)) searchHotels = false;
         }
 
+        // Fetch from Hotels
         if (searchHotels) {
-            combinedResults.putAll(getFilteredData("hotels_info", "hotel_name", "hotel_type", filters, sortBy));
+            combinedResults.putAll(getFilteredData("hotels_info", "Hotel_Name", "Hotel_Type", filters, sortBy));
         }
+        // Fetch from PGs
         if (searchPGs) {
             combinedResults.putAll(getFilteredData("paying_guest_info", "pg_name", "pg_type", filters, sortBy));
         }
@@ -132,26 +110,39 @@ public class AppFilterHandler implements HttpHandler {
         JSONArray dataArray = new JSONArray();
         List<Object> params = new ArrayList<>();
         
+        // Base SQL
         StringBuilder query = new StringBuilder("SELECT * FROM " + tableName + " WHERE status = 'Active'");
 
         String searchQuery = filters.optString("searchQuery", filters.optString("query", "")).trim();
-        String city = filters.optString("city", "").trim();
+        String cityFilter = filters.optString("city", "").trim();
 
+        // 1. Enhanced Keyword Search (Name, City, State, Country, Rating)
         if (!searchQuery.isEmpty()) {
-            query.append(" AND (LOWER(").append(nameCol).append(") LIKE ? OR LOWER(").append(typeCol)
-                 .append(") LIKE ? OR LOWER(city) LIKE ? OR LOWER(area) LIKE ?)");
-            String p = "%" + searchQuery.toLowerCase() + "%";
-            for (int i = 0; i < 4; i++) params.add(p);
+            query.append(" AND (LOWER(").append(nameCol).append(") LIKE ? ")
+                 .append("OR LOWER(city) LIKE ? ")
+                 .append("OR LOWER(state) LIKE ? ")
+                 .append("OR LOWER(country) LIKE ? ")
+                 .append("OR CAST(rating AS CHAR) LIKE ?)");
+            
+            String wildcard = "%" + searchQuery.toLowerCase() + "%";
+            params.add(wildcard); // Name
+            params.add(wildcard); // City
+            params.add(wildcard); // State
+            params.add(wildcard); // Country
+            params.add(wildcard); // Rating (as string match)
         }
 
-        if (!city.isEmpty()) {
+        // 2. Specific City Filter (from Location Selector)
+        if (!cityFilter.isEmpty()) {
             query.append(" AND (LOWER(city) = ? OR LOWER(state) = ?)");
-            params.add(city.toLowerCase());
-            params.add(city.toLowerCase());
+            params.add(cityFilter.toLowerCase());
+            params.add(cityFilter.toLowerCase());
         }
 
+        // 3. Price Filter Logic
         double minPrice = filters.optDouble("minPrice", 0);
         double maxPrice = filters.optDouble("maxPrice", 0);
+        // Logic to strip currency symbols for numerical comparison
         String numericPriceSql = "CAST(REPLACE(REPLACE(room_price, '₹', ''), ',', '') AS DECIMAL(10,2))";
 
         if (minPrice > 0) {
@@ -163,21 +154,25 @@ public class AppFilterHandler implements HttpHandler {
             params.add(maxPrice);
         }
 
+        // 4. Standalone Rating Filter
         if (filters.has("rating") && !filters.isNull("rating")) {
-            double rating = filters.optDouble("rating", 0);
-            if (rating > 0) {
+            double r = filters.optDouble("rating", 0);
+            if (r > 0) {
                 query.append(" AND rating >= ?");
-                params.add(rating);
+                params.add(r);
             }
         }
 
-        if (!sortBy.isEmpty() && !sortBy.equals("none")) {
+        // 5. Sorting Logic
+        if (sortBy != null && !sortBy.equals("none")) {
             switch (sortBy) {
                 case "price_lowest": query.append(" ORDER BY ").append(numericPriceSql).append(" ASC"); break;
                 case "price_highest": query.append(" ORDER BY ").append(numericPriceSql).append(" DESC"); break;
                 case "top_rated": query.append(" ORDER BY rating DESC"); break;
             }
         }
+
+        query.append(" LIMIT 100");
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(query.toString())) {
@@ -188,21 +183,23 @@ public class AppFilterHandler implements HttpHandler {
 
             ResultSet rs = stmt.executeQuery();
             ResultSetMetaData meta = rs.getMetaData();
+            
             while (rs.next()) {
                 JSONObject obj = new JSONObject();
                 for (int i = 1; i <= meta.getColumnCount(); i++) {
-                    String col = meta.getColumnLabel(i).toLowerCase();
+                    String col = meta.getColumnLabel(i);
                     Object val = rs.getObject(i);
-                    obj.put(col, val == null ? JSONObject.NULL : val);
+                    obj.put(col.toLowerCase(), val == null ? JSONObject.NULL : val);
                 }
                 
-                if (tableName.equals("paying_guest_info")) {
+                // Unified Mapping for Flutter UI
+                if (tableName.equalsIgnoreCase("paying_guest_info")) {
                     obj.put("display_name", rs.getString("pg_name"));
                     obj.put("display_type", rs.getString("pg_type"));
                     obj.put("category_tag", "PG");
                 } else {
-                    obj.put("display_name", rs.getString("hotel_name"));
-                    obj.put("display_type", rs.getString("hotel_type"));
+                    obj.put("display_name", rs.getString("Hotel_Name"));
+                    obj.put("display_type", rs.getString("Hotel_Type"));
                     obj.put("category_tag", "Hotel");
                 }
                 dataArray.put(obj);
@@ -211,22 +208,20 @@ public class AppFilterHandler implements HttpHandler {
         return dataArray;
     }
 
-    private void addCorsHeaders(HttpExchange exchange) {
-        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    }
-
     private void sendJsonResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
-        byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = response.getBytes("UTF-8");
         exchange.sendResponseHeaders(statusCode, bytes.length);
-        try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
     }
 
     private void sendResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
-        byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = response.getBytes("UTF-8");
         exchange.sendResponseHeaders(statusCode, bytes.length);
-        try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
     }
 }
