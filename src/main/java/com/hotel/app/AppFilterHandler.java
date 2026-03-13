@@ -20,7 +20,6 @@ public class AppFilterHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-
         if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
             handleFilterRequest(exchange);
         } else {
@@ -29,12 +28,9 @@ public class AppFilterHandler implements HttpHandler {
     }
 
     private void handleFilterRequest(HttpExchange exchange) throws IOException {
-
         try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), "utf-8"))) {
-
             StringBuilder body = new StringBuilder();
             String line;
-
             while ((line = br.readLine()) != null) {
                 body.append(line);
             }
@@ -45,151 +41,91 @@ public class AppFilterHandler implements HttpHandler {
             }
 
             JSONObject requestJson = new JSONObject(body.toString());
-
-            JSONObject filters = requestJson.optJSONObject("filters");
-            if (filters == null) {
-                filters = requestJson;
-            }
-
-            String sortBy = requestJson.optString("sortBy", "none");
+            // Support both direct filters or nested filters object
+            JSONObject filters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
+            String sortBy = requestJson.optString("sortBy", filters.optString("sortBy", "none"));
 
             JSONArray result = fetchDataWithFilters(filters, sortBy);
-
             sendJsonResponse(exchange, result.toString(), 200);
 
         } catch (Exception e) {
             e.printStackTrace();
-            sendResponse(exchange, e.getMessage(), 500);
+            sendResponse(exchange, "Internal Server Error: " + e.getMessage(), 500);
         }
     }
 
     private JSONArray fetchDataWithFilters(JSONObject filters, String sortBy) throws SQLException {
-
         JSONArray combined = new JSONArray();
-
-        combined.putAll(getFilteredData(
-                "hotels_info",
-                "Hotel_Name",
-                "Hotel_Type",
-                "Room_Price",
-                filters,
-                sortBy
-        ));
-
-        combined.putAll(getFilteredData(
-                "paying_guest_info",
-                "pg_name",
-                "pg_type",
-                "room_price",
-                filters,
-                sortBy
-        ));
+        
+        // Fetch from Hotels
+        combined.putAll(getFilteredData("hotels_info", "Hotel_Name", "Hotel_Type", "Room_Price", filters, sortBy));
+        
+        // Fetch from PGs
+        combined.putAll(getFilteredData("paying_guest_info", "pg_name", "pg_type", "room_price", filters, sortBy));
 
         return combined;
     }
 
-    private JSONArray getFilteredData(
-            String table,
-            String nameCol,
-            String typeCol,
-            String priceCol,
-            JSONObject filters,
-            String sortBy) throws SQLException {
-
+    private JSONArray getFilteredData(String table, String nameCol, String typeCol, String priceCol, JSONObject filters, String sortBy) throws SQLException {
         JSONArray array = new JSONArray();
         List<Object> params = new ArrayList<>();
-
         StringBuilder query = new StringBuilder("SELECT * FROM " + table + " WHERE status='Active'");
 
+        // 1. IMPROVED SEARCH LOGIC (Fixes the "Vivanta" issue)
         String searchQuery = filters.optString("searchQuery", "").trim();
-        String city = filters.optString("city", "").trim();
-
-        double minPrice = filters.optDouble("minPrice", 0);
-        double maxPrice = filters.optDouble("maxPrice", 0);
-        double rating = filters.optDouble("rating", 0);
-
-        // SEARCH FILTER
         if (!searchQuery.isEmpty()) {
-
-            query.append(" AND (LOWER(").append(nameCol).append(") LIKE ?")
-                    .append(" OR LOWER(city) LIKE ?")
-                    .append(" OR LOWER(state) LIKE ?")
-                    .append(" OR LOWER(country) LIKE ?)");
-
-            String q = "%" + searchQuery.toLowerCase() + "%";
-
-            params.add(q);
-            params.add(q);
-            params.add(q);
-            params.add(q);
+            // Priority: Name match or location match
+            query.append(" AND (LOWER(").append(nameCol).append(") LIKE ? OR LOWER(city) LIKE ?)");
+            params.add("%" + searchQuery.toLowerCase() + "%");
+            params.add("%" + searchQuery.toLowerCase() + "%");
         }
 
-        // CITY FILTER
+        // 2. CITY FILTER
+        String city = filters.optString("city", "").trim();
         if (!city.isEmpty()) {
-
-            query.append(" AND (LOWER(city)=? OR LOWER(state)=?)");
-
-            params.add(city.toLowerCase());
+            query.append(" AND (LOWER(city) = ?)");
             params.add(city.toLowerCase());
         }
 
-        // PRICE FILTER (CHECKS ALL VALUES IN COMMA LIST)
-        if (minPrice > 0 && maxPrice > 0) {
-
-            query.append(" AND (");
-
-            for (int i = 1; i <= 5; i++) {
-
-                if (i > 1) query.append(" OR ");
-
-                query.append("CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(")
-                        .append(priceCol)
-                        .append(", ',', ")
-                        .append(i)
-                        .append("), ',', -1) AS DECIMAL(10,2)) BETWEEN ? AND ?");
-
-                params.add(minPrice);
-                params.add(maxPrice);
-            }
-
-            query.append(")");
-        }
-
-        // RATING FILTER
+        // 3. RATING FILTER
+        double rating = filters.optDouble("rating", 0);
         if (rating > 0) {
-
             query.append(" AND rating >= ?");
             params.add(rating);
         }
 
-        // SORTING
-        if (sortBy != null && !sortBy.equals("none")) {
+        // 4. PRICE FILTER (Handling comma-separated strings)
+        double minPrice = filters.optDouble("minPrice", 0);
+        double maxPrice = filters.optDouble("maxPrice", 0);
+        if (maxPrice > 0) {
+            query.append(" AND (");
+            // This checks the 1st, 2nd, and 3rd price in your comma list
+            query.append("CAST(SUBSTRING_INDEX(").append(priceCol).append(", ',', 1) AS DECIMAL) BETWEEN ? AND ? ");
+            query.append("OR CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(").append(priceCol).append(", ',', 2), ',', -1) AS DECIMAL) BETWEEN ? AND ? ");
+            query.append("OR CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(").append(priceCol).append(", ',', 3), ',', -1) AS DECIMAL) BETWEEN ? AND ?");
+            query.append(")");
 
-            String firstPrice = "CAST(SUBSTRING_INDEX(" + priceCol + ", ',', 1) AS DECIMAL(10,2))";
-
-            switch (sortBy) {
-
-                case "price_lowest":
-                    query.append(" ORDER BY ").append(firstPrice).append(" ASC");
-                    break;
-
-                case "price_highest":
-                    query.append(" ORDER BY ").append(firstPrice).append(" DESC");
-                    break;
-
-                case "top_rated":
-                    query.append(" ORDER BY rating DESC");
-                    break;
+            // Add 6 params (min, max, min, max, min, max)
+            for(int i=0; i<3; i++) {
+                params.add(minPrice);
+                params.add(maxPrice);
             }
         }
 
-        query.append(" LIMIT 100");
+        // 5. SORTING LOGIC
+        if (sortBy != null && !sortBy.equals("none")) {
+            String firstPriceExpr = "CAST(SUBSTRING_INDEX(" + priceCol + ", ',', 1) AS DECIMAL)";
+            switch (sortBy) {
+                case "price_lowest": query.append(" ORDER BY ").append(firstPriceExpr).append(" ASC"); break;
+                case "price_highest": query.append(" ORDER BY ").append(firstPriceExpr).append(" DESC"); break;
+                case "top_rated": query.append(" ORDER BY rating DESC"); break;
+            }
+        }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(query.toString())) {
 
             for (int i = 0; i < params.size(); i++) {
-
                 stmt.setObject(i + 1, params.get(i));
             }
 
@@ -197,62 +133,35 @@ public class AppFilterHandler implements HttpHandler {
             ResultSetMetaData meta = rs.getMetaData();
 
             while (rs.next()) {
-
                 JSONObject obj = new JSONObject();
-
                 for (int i = 1; i <= meta.getColumnCount(); i++) {
-
                     String col = meta.getColumnLabel(i);
-
                     Object val = rs.getObject(i);
-
-                    obj.put(col.toLowerCase(),
-                            val == null ? JSONObject.NULL : val);
+                    obj.put(col.toLowerCase(), val == null ? JSONObject.NULL : val);
                 }
-
-                if (table.equalsIgnoreCase("paying_guest_info")) {
-
-                    obj.put("display_name", rs.getString("pg_name"));
-                    obj.put("display_type", rs.getString("pg_type"));
-                    obj.put("category_tag", "PG");
-
-                } else {
-
-                    obj.put("display_name", rs.getString("Hotel_Name"));
-                    obj.put("display_type", rs.getString("Hotel_Type"));
-                    obj.put("category_tag", "Hotel");
-                }
-
+                
+                // Unified Display Fields
+                boolean isPg = table.equalsIgnoreCase("paying_guest_info");
+                obj.put("display_name", rs.getString(isPg ? "pg_name" : "Hotel_Name"));
+                obj.put("display_type", rs.getString(isPg ? "pg_type" : "Hotel_Type"));
+                obj.put("category_tag", isPg ? "PG" : "Hotel");
+                
                 array.put(obj);
             }
         }
-
         return array;
     }
 
     private void sendJsonResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
-
         exchange.getResponseHeaders().set("Content-Type", "application/json");
-
         byte[] bytes = response.getBytes("UTF-8");
-
         exchange.sendResponseHeaders(statusCode, bytes.length);
-
-        try (OutputStream os = exchange.getResponseBody()) {
-
-            os.write(bytes);
-        }
+        try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
     }
 
     private void sendResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
-
         byte[] bytes = response.getBytes("UTF-8");
-
         exchange.sendResponseHeaders(statusCode, bytes.length);
-
-        try (OutputStream os = exchange.getResponseBody()) {
-
-            os.write(bytes);
-        }
+        try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
     }
 }
