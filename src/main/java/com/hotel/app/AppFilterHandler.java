@@ -108,17 +108,13 @@ public class AppFilterHandler implements HttpHandler {
         double maxPrice = filters.optDouble("maxPrice", 0);
         double rating = filters.optDouble("rating", 0);
 
-        // Extract FIRST price from comma-separated list
-        String numericPrice =
-                "CAST(SUBSTRING_INDEX(" + priceCol + ", ',', 1) AS DECIMAL(10,2))";
-
-        // SEARCH
+        // SEARCH FILTER
         if (!searchQuery.isEmpty()) {
 
             query.append(" AND (LOWER(").append(nameCol).append(") LIKE ?")
                     .append(" OR LOWER(city) LIKE ?")
                     .append(" OR LOWER(state) LIKE ?")
-                    .append(" OR LOWER(country) LIKE ? )");
+                    .append(" OR LOWER(country) LIKE ?)");
 
             String q = "%" + searchQuery.toLowerCase() + "%";
 
@@ -137,40 +133,48 @@ public class AppFilterHandler implements HttpHandler {
             params.add(city.toLowerCase());
         }
 
-        // PRICE FILTER
-        if (minPrice > 0) {
+        // PRICE FILTER (CHECKS ALL VALUES IN COMMA LIST)
+        if (minPrice > 0 && maxPrice > 0) {
 
-            query.append(" AND ").append(numericPrice).append(" >= ?");
+            query.append(" AND (");
 
-            params.add(minPrice);
-        }
+            for (int i = 1; i <= 5; i++) {
 
-        if (maxPrice > 0) {
+                if (i > 1) query.append(" OR ");
 
-            query.append(" AND ").append(numericPrice).append(" <= ?");
+                query.append("CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(")
+                        .append(priceCol)
+                        .append(", ',', ")
+                        .append(i)
+                        .append("), ',', -1) AS DECIMAL(10,2)) BETWEEN ? AND ?");
 
-            params.add(maxPrice);
+                params.add(minPrice);
+                params.add(maxPrice);
+            }
+
+            query.append(")");
         }
 
         // RATING FILTER
         if (rating > 0) {
 
             query.append(" AND rating >= ?");
-
             params.add(rating);
         }
 
-        // SORT
+        // SORTING
         if (sortBy != null && !sortBy.equals("none")) {
+
+            String firstPrice = "CAST(SUBSTRING_INDEX(" + priceCol + ", ',', 1) AS DECIMAL(10,2))";
 
             switch (sortBy) {
 
                 case "price_lowest":
-                    query.append(" ORDER BY ").append(numericPrice).append(" ASC");
+                    query.append(" ORDER BY ").append(firstPrice).append(" ASC");
                     break;
 
                 case "price_highest":
-                    query.append(" ORDER BY ").append(numericPrice).append(" DESC");
+                    query.append(" ORDER BY ").append(firstPrice).append(" DESC");
                     break;
 
                 case "top_rated":
