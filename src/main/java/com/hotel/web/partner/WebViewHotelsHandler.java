@@ -3,13 +3,14 @@ package com.hotel.web.partner;
 import com.hotel.utilities.DbConfig;
 import com.sun.net.httpserver.*;
 import java.io.*;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
 
 public class WebViewHotelsHandler implements HttpHandler {
 
-	private final DbConfig dbConfig;
+    private final DbConfig dbConfig;
 
     public WebViewHotelsHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
@@ -52,15 +53,18 @@ public class WebViewHotelsHandler implements HttpHandler {
                 sendResponse(exchange, 400, "status=error&message=Missing parameters");
             }
         } catch (SQLException e) {
+            e.printStackTrace(); // Useful for server-side debugging
             sendResponse(exchange, 500, "status=error&message=" + escapeCell(e.getMessage()));
         }
     }
 
     private List<String> fetchHotelsFromDB(String partnerId) throws SQLException {
         List<String> hotelRows = new ArrayList<>();
-        String sql = "SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode," +
-                     "hotel_location, total_rooms, available_rooms, room_price, amenities, policies, rating, hotel_contact, "
-                     + "about_this_property, hotel_images, customizatio, status" +
+        
+        // Fixed: Added 'n' to customization, added missing space, and fixed string concatenation
+        String sql = "SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, " +
+                     "hotel_location, total_rooms, available_rooms, room_price, amenities, policies, rating, hotel_contact, " +
+                     "about_this_property, hotel_images, customization, status " +
                      "FROM hotels_info WHERE partner_id = ?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -70,7 +74,8 @@ public class WebViewHotelsHandler implements HttpHandler {
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     List<String> cells = new ArrayList<>();
-                    for (int i = 1; i <= 22; i++) { //
+                    // Explicitly looping 1-22 based on the SELECT order
+                    for (int i = 1; i <= 22; i++) {
                         String val = rs.getString(i);
                         cells.add(escapeCell(val));
                     }
@@ -110,8 +115,8 @@ public class WebViewHotelsHandler implements HttpHandler {
         for (String pair : body.split("&")) {
             String[] parts = pair.split("=", 2);
             if (parts.length == 2) {
-                String key = java.net.URLDecoder.decode(parts[0], "UTF-8").toLowerCase();
-                String val = java.net.URLDecoder.decode(parts[1], "UTF-8");
+                String key = URLDecoder.decode(parts[0], "UTF-8").toLowerCase();
+                String val = URLDecoder.decode(parts[1], "UTF-8");
                 map.put(key, val);
             }
         }
@@ -120,7 +125,12 @@ public class WebViewHotelsHandler implements HttpHandler {
 
     private String escapeCell(String s) {
         if (s == null) return "";
-        return s.replace("&", "and").replace("=", ":").replace("|", "/").replace("\r", " ").replace("\n", " ");
+        // Standardizing special characters to prevent row-breaking in Flutter parsing
+        return s.replace("&", "and")
+                .replace("=", ":")
+                .replace("|", "/")
+                .replace("\r", " ")
+                .replace("\n", " ");
     }
 
     private void sendResponse(HttpExchange exchange, int code, String response) throws IOException {
