@@ -185,7 +185,6 @@ public class AddPgHandler implements HttpHandler {
         stmt.setInt(i++, parseIntSafe(params.get("available_rooms")));
         stmt.setString(i++, params.getOrDefault("room_price", ""));
         stmt.setString(i++, params.getOrDefault("amenities", ""));
-        stmt.setString(i++, params.getOrDefault("description", ""));
         stmt.setString(i++, params.getOrDefault("policies", ""));
 
         double rating = parseDoubleSafe(params.get("rating"));
