@@ -67,10 +67,10 @@ public class WebViewPGsHandler implements HttpHandler {
         List<String> pgRows = new ArrayList<>();
 
         String sql =
-            "SELECT PG_ID, Partner_ID, PG_Name, PG_Type, Room_Type, Address, City, State, Country, Pincode, " +
-            "Total_Single_Sharing_Rooms, Total_Double_Sharing_Rooms, Total_Three_Sharing_Rooms, " +
-            "Total_Four_Sharing_Rooms, Total_Five_Sharing_Rooms, Room_Price, Amenities, Description, Rating, PG_Contact, Status " +
-            "FROM paying_guest_info WHERE Partner_ID = ?";
+            "SELECT pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, " +
+            "total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, " +
+            "total_four_sharing_rooms, total_five_sharing_rooms, room_price, amenities, rating, pg_contact, status " +
+            "FROM paying_guest_info WHERE partner_id = ?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -121,7 +121,7 @@ public class WebViewPGsHandler implements HttpHandler {
         if (pgIds.isEmpty()) return;
 
         String placeholders = String.join(",", Collections.nCopies(pgIds.size(), "?"));
-        String sql = "DELETE FROM paying_guest_info WHERE PG_ID IN (" + placeholders + ")";
+        String sql = "DELETE FROM paying_guest_info WHERE pg_id IN (" + placeholders + ")";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
