@@ -39,7 +39,6 @@ public class AddPgHandler implements HttpHandler {
             return;
         }
 
-        // ✅ FIX: Memory-safe reading to prevent OutOfMemoryError
         String body = readRequestBody(exchange);
         Map<String, String> params;
 
@@ -57,7 +56,7 @@ public class AddPgHandler implements HttpHandler {
         }
 
         // ===============================
-        // ✅ UPDATED IMAGE HANDLING
+        // ✅ IMAGE HANDLING (MATCHES FRONTEND)
         // ===============================
         try {
             String pgId = params.getOrDefault("pg_id", "").trim();
@@ -66,13 +65,8 @@ public class AddPgHandler implements HttpHandler {
                 params.put("pg_id", pgId);
             }
 
-            // Detect environment (Render sets PORT variable automatically)
             boolean isProduction = System.getenv("PORT") != null;
 
-            // Scenario 1: Frontend sends pre-uploaded URLs (Immediate Upload Strategy)
-            // No action needed here, the 'hotel_images' string will be passed directly to DB
-
-            // Scenario 2: Frontend sends Base64 (Legacy/Postman fallback)
             if (params.containsKey("images") && !params.get("images").trim().isEmpty()) {
                 JSONObject json = new JSONObject(params.get("images"));
                 List<String> savedUrls = new ArrayList<>();
@@ -90,10 +84,8 @@ public class AddPgHandler implements HttpHandler {
                         String fileName = pgId + "_" + safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
 
                         if (isProduction) {
-                            // Production: Upload to Supabase Storage
                             savedUrls.add(HotelBookingServer.uploadToSupabase(data, fileName));
                         } else {
-                            // Local: Save to local directory
                             File dir = new File(dbConfig.getHotelImagesPath() + File.separator + pgId + File.separator + safeCategory);
                             if (!dir.exists()) dir.mkdirs();
                             File f = new File(dir, fileName);
@@ -107,7 +99,7 @@ public class AddPgHandler implements HttpHandler {
                 }
             }
         } catch (Exception e) {
-            System.err.println("Non-critical image processing error: " + e.getMessage());
+            System.err.println("Image processing error: " + e.getMessage());
         }
 
         // ===============================
@@ -144,7 +136,8 @@ public class AddPgHandler implements HttpHandler {
     }
 
     private boolean addPGToDB(String pgId, Map<String, String> params) throws SQLException {
-        String sql = "INSERT INTO paying_guest_info (pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, room_price, amenities, description, policies, rating, pg_contact, about_this_pg, pg_images, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::pg_status_enum)";
+        // SQL updated to remove 'description'
+        String sql = "INSERT INTO paying_guest_info (pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, room_price, amenities, policies, rating, pg_contact, about_this_pg, pg_images, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::pg_status_enum)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setParams(stmt, pgId, params, false);
@@ -153,7 +146,8 @@ public class AddPgHandler implements HttpHandler {
     }
 
     private boolean updatePGInDB(String pgId, Map<String, String> params) throws SQLException {
-        String sql = "UPDATE paying_guest_info SET pg_name=?, partner_id=?, pg_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, total_single_sharing_rooms=?, total_double_sharing_rooms=?, total_three_sharing_rooms=?, total_four_sharing_rooms=?, total_five_sharing_rooms=?, hotel_location=?, available_rooms=?, room_price=?, amenities=?, description=?, policies=?, rating=?, pg_contact=?, about_this_pg=?, pg_images=?, status=? WHERE pg_id=?";
+        // SQL updated to remove 'description'
+        String sql = "UPDATE paying_guest_info SET partner_id=?, pg_name=?, pg_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, total_single_sharing_rooms=?, total_double_sharing_rooms=?, total_three_sharing_rooms=?, total_four_sharing_rooms=?, total_five_sharing_rooms=?, hotel_location=?, available_rooms=?, room_price=?, amenities=?, policies=?, rating=?, pg_contact=?, about_this_pg=?, pg_images=?, status=? WHERE pg_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setParams(stmt, pgId, params, true);
@@ -188,19 +182,18 @@ public class AddPgHandler implements HttpHandler {
         stmt.setString(i++, params.getOrDefault("policies", ""));
 
         double rating = parseDoubleSafe(params.get("rating"));
-        stmt.setDouble(i++, (rating < 0 || rating > 10) ? 0.0 : rating);
+        stmt.setDouble(i++, rating);
 
         stmt.setString(i++, params.getOrDefault("pg_contact", ""));
         stmt.setString(i++, params.getOrDefault("about_this_pg", ""));
-        stmt.setString(i++, params.getOrDefault("hotel_images", "")); // Can receive direct URLs
+        stmt.setString(i++, params.getOrDefault("hotel_images", ""));
 
         String status = params.getOrDefault("status", "Active");
-        stmt.setString(i++, (status.equals("Active") || status.equals("Inactive")) ? status : "Active");
+        stmt.setString(i++, status);
 
         if (isUpdate) stmt.setString(i, pgId);
     }
 
-    // ✅ OPTIMIZED UTILITIES
     private int parseIntSafe(String s) {
         try { return (s == null || s.trim().isEmpty()) ? 0 : Integer.parseInt(s.trim()); } catch (Exception e) { return 0; }
     }
@@ -210,7 +203,6 @@ public class AddPgHandler implements HttpHandler {
     }
 
     private String readRequestBody(HttpExchange exchange) throws IOException {
-        // Character buffering to reduce heap allocation
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8), 8192)) {
             StringBuilder sb = new StringBuilder();
             char[] buffer = new char[8192];
