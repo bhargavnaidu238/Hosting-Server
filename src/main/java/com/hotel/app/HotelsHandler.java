@@ -20,7 +20,6 @@ public class HotelsHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // Add CORS headers for web/mobile compatibility
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
@@ -34,14 +33,12 @@ public class HotelsHandler implements HttpHandler {
         String path = uri.getPath();
 
         try {
-            // Serve images
             if (path.startsWith("/hotel_images/")) {
                 String fileName = path.substring("/hotel_images/".length());
                 serveImage(exchange, fileName);
                 return;
             }
 
-            // Serve hotel data
             if (path.startsWith("/hotels")) {
                 if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                     sendError(exchange, 405, "Method Not Allowed");
@@ -62,8 +59,9 @@ public class HotelsHandler implements HttpHandler {
 
                 List<Map<String, Object>> hotels = new ArrayList<>();
 
+                // FIXED: Removed 'description' column to match updated schema
                 String sql = "SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, " +
-                        "pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, description, " +
+                        "pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, " +
                         "policies, rating, hotel_contact, about_this_property, hotel_images, customization, status " +
                         "FROM hotels_info WHERE status = 'Active'";
 
@@ -95,7 +93,6 @@ public class HotelsHandler implements HttpHandler {
                             String key = meta.getColumnLabel(i);
                             Object val = rs.getObject(i);
                             
-                            // Handle Images specially
                             if ("hotel_images".equalsIgnoreCase(key)) {
                                 row.put("Hotel_Images", buildImageCsv(rs.getString("hotel_images")));
                             } else {
@@ -116,10 +113,6 @@ public class HotelsHandler implements HttpHandler {
         }
     }
 
-    /**
-     * FIXED: This helper ensures that all images are returned as a single 
-     * COMMA-SEPARATED STRING, which matches your Flutter split logic.
-     */
     private String buildImageCsv(String raw) {
         if (raw == null || raw.isBlank()) return "";
         
@@ -133,7 +126,6 @@ public class HotelsHandler implements HttpHandler {
             if (t.toLowerCase().startsWith("http")) {
                 fixedUrls.add(t);
             } else {
-                // Prepend local server path for local images
                 fixedUrls.add("http://10.0.2.2:8080/hotel_images/" + t);
             }
         }
