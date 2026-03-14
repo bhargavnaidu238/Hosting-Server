@@ -58,9 +58,10 @@ public class WebViewHotelsHandler implements HttpHandler {
 
     private List<String> fetchHotelsFromDB(String partnerId) throws SQLException {
         List<String> hotelRows = new ArrayList<>();
-        String sql = "SELECT Hotel_ID, Partner_ID, Hotel_Name, Hotel_Type, Address, City, State, Country, Pincode," +
-                     "Total_Rooms, Room_Price, Amenities, Description, Rating, Hotel_Contact, Status " +
-                     "FROM Hotels_info WHERE Partner_ID = ?";
+        String sql = "SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode," +
+                     "hotel_location, total_rooms, available_rooms, room_price, amenities, policies, rating, hotel_contact, "
+                     + "about_this_property, hotel_images, customizatio, status" +
+                     "FROM hotels_info WHERE partner_id = ?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -69,7 +70,7 @@ public class WebViewHotelsHandler implements HttpHandler {
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     List<String> cells = new ArrayList<>();
-                    for (int i = 1; i <= 16; i++) { // 16 columns
+                    for (int i = 1; i <= 22; i++) { //
                         String val = rs.getString(i);
                         cells.add(escapeCell(val));
                     }
@@ -83,7 +84,7 @@ public class WebViewHotelsHandler implements HttpHandler {
     private void deleteHotelsFromDB(List<String> hotelIds) throws SQLException {
         if (hotelIds.isEmpty()) return;
         String placeholders = String.join(",", Collections.nCopies(hotelIds.size(), "?"));
-        String sql = "DELETE FROM Hotels_info WHERE Hotel_ID IN (" + placeholders + ")";
+        String sql = "DELETE FROM hotels_info WHERE hotel_id IN (" + placeholders + ")";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             for (int i = 0; i < hotelIds.size(); i++) {
