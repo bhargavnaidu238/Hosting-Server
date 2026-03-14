@@ -65,12 +65,12 @@ public class WebViewPGsHandler implements HttpHandler {
     private List<String> fetchPGsFromDB(String partnerId) throws SQLException {
         List<String> pgRows = new ArrayList<>();
 
-        // Strictly ordered SQL to match Flutter's indexing
+        // Strictly ordered SQL based on your CREATE TABLE schema
         String sql =
-            "SELECT pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, " + // 0-9
-            "total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, " + // 10-12
-            "total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, " + // 13-16
-            "room_price, amenities, policies, rating, pg_contact, about_this_pg, pg_images, status " + // 17-24
+            "SELECT pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, " + // 1-10
+            "total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, " + // 11-13
+            "total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, " + // 14-17
+            "room_price, amenities, policies, rating, pg_contact, about_this_pg, pg_images, status " + // 18-25
             "FROM paying_guest_info WHERE partner_id = ?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -82,21 +82,19 @@ public class WebViewPGsHandler implements HttpHandler {
                 while (rs.next()) {
                     List<String> row = new ArrayList<>();
 
-                    // Loop through the 25 base fields
+                    // Add all 25 columns from the DB result set
                     for (int i = 1; i <= 25; i++) {
                         row.add(escapeCell(rs.getString(i)));
                     }
 
-                    // Calculate Total Rooms for index 20 (as per your Flutter code's comment)
+                    // Calculate Total Rooms separately
                     int total = safeInt(rs.getString(11)) + safeInt(rs.getString(12)) + 
                                 safeInt(rs.getString(13)) + safeInt(rs.getString(14)) + 
                                 safeInt(rs.getString(15));
                     
-                    // We replace the value at the corresponding position if your Flutter code needs it specifically
-                    // Or we append it as an extra field if Flutter is parsing col[20]
-                    // Based on your Flutter: "total_Rooms": cols[20]
-                    // Let's ensure index 20 contains the sum
-                    row.set(20, String.valueOf(total)); 
+                    // Add Total Rooms as an EXTRA column at the very end
+                    // This prevents overwriting the rating or status fields
+                    row.add(String.valueOf(total)); 
 
                     pgRows.add(String.join("|", row));
                 }
