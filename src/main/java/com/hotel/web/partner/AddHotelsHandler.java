@@ -136,7 +136,7 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean addHotelToDB(String hotelId, Map<String, String> params) throws SQLException {
-        String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, description, policies, rating, hotel_contact, about_this_property, hotel_images, customization, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, rating, hotel_contact, about_this_property, hotel_images, customization, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, true);
@@ -145,7 +145,7 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean updateHotelInDB(String hotelId, Map<String, String> params) throws SQLException {
-        String sql = "UPDATE hotels_info SET hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, description=?, policies=?, rating=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
+        String sql = "UPDATE hotels_info SET hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, rating=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, false);
@@ -170,7 +170,6 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setInt(idx++, Integer.parseInt(params.getOrDefault("available_rooms", params.getOrDefault("total_rooms", "0"))));
         stmt.setString(idx++, params.getOrDefault("room_price", ""));
         stmt.setString(idx++, params.getOrDefault("amenities", ""));
-        stmt.setString(idx++, params.getOrDefault("description", ""));
         stmt.setString(idx++, params.getOrDefault("policies", ""));
         stmt.setDouble(idx++, Double.parseDouble(params.getOrDefault("rating", "0.0")));
         stmt.setString(idx++, params.getOrDefault("hotel_contact", ""));
