@@ -115,7 +115,7 @@ public class HotelBookingServer {
         server.createContext("/getPartnerTransactions", new GetPartnerTransactionsHandler(dbConfig));
         
      // ========== Notification Service ==========
-        server.createContext("/send-email", new EmailHandler());
+        server.createContext("/send-email", new EmailHandler(dbConfig));
 
 
 
