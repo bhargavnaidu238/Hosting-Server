@@ -15,20 +15,20 @@ public class EmailService {
     private final String apiKey;
     private final String senderEmail;
 
-    public EmailService() {
-        // Read from environment variables (Render)
-        this.apiKey = System.getenv("EMAIL_NOTIFICATION_API");
-        this.senderEmail = System.getenv("SENDER_MAIL");
+    public EmailService(String apiKey, String senderEmail) {
+
+        this.apiKey = apiKey;
+        this.senderEmail = senderEmail;
 
         if (apiKey == null || senderEmail == null) {
-            throw new RuntimeException("Email environment variables are not configured!");
+            throw new RuntimeException("Email configuration is missing!");
         }
     }
 
-    public void sendEmail(String toEmail, String subject, String body) throws IOException {
+    public void sendEmail(String recipientEmail, String subject, String body) throws IOException {
 
         Email from = new Email(senderEmail);
-        Email to = new Email(toEmail);
+        Email to = new Email(recipientEmail);
 
         Content content = new Content("text/plain", body);
 
@@ -43,6 +43,7 @@ public class EmailService {
 
         Response response = sendGrid.api(request);
 
-        System.out.println("Email Status Code: " + response.getStatusCode());
+        System.out.println("Email sent to: " + recipientEmail);
+        System.out.println("SendGrid Status Code: " + response.getStatusCode());
     }
 }
