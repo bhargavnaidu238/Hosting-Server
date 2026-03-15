@@ -117,7 +117,6 @@ public class WebBookingHandler implements HttpHandler {
         boolean success = false;
 
         if (!bookingId.isEmpty()) {
-            // Added casting to ENUM type
             String sql = "UPDATE bookings_info SET booking_status = 'CANCELLED'::booking_status_enum WHERE booking_id = ?";
             try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
                  PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -146,8 +145,7 @@ public class WebBookingHandler implements HttpHandler {
         String message = "";
 
         if (!bookingId.isEmpty() && !newStatus.isEmpty()) {
-            String fetchSql = "SELECT booking_status, check_out_date FROM bookings_info WHERE booking_id = ?";
-            // Fixed: Added explicit cast to booking_status_enum
+            String fetchSql = "SELECT booking_status, check_in_date, check_out_date FROM bookings_info WHERE booking_id = ?";
             String updateSql = "UPDATE bookings_info SET booking_status = ?::booking_status_enum WHERE booking_id = ?";
 
             try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
@@ -155,15 +153,16 @@ public class WebBookingHandler implements HttpHandler {
 
                 fetchStmt.setString(1, bookingId);
                 String currentStatus = "";
+                LocalDate checkInDate = null;
                 LocalDate checkOutDate = null;
 
                 try (ResultSet rs = fetchStmt.executeQuery()) {
                     if (rs.next()) {
                         currentStatus = rs.getString("booking_status").toUpperCase();
+                        String checkIn = rs.getString("check_in_date");
                         String checkOut = rs.getString("check_out_date");
-                        if (checkOut != null && !checkOut.isEmpty()) {
-                            checkOutDate = LocalDate.parse(checkOut.split(" ")[0]);
-                        }
+                        if (checkIn != null && !checkIn.isEmpty()) checkInDate = LocalDate.parse(checkIn.split(" ")[0]);
+                        if (checkOut != null && !checkOut.isEmpty()) checkOutDate = LocalDate.parse(checkOut.split(" ")[0]);
                     }
                 }
 
@@ -171,11 +170,21 @@ public class WebBookingHandler implements HttpHandler {
                 boolean allowed = false;
 
                 switch (newStatus) {
-                    case "CONFIRMED": allowed = "PENDING".equals(currentStatus); break;
-                    case "CANCELLED": allowed = "PENDING".equals(currentStatus) || "CONFIRMED".equals(currentStatus); break;
+                    case "CONFIRMED": 
+                        allowed = "PENDING".equals(currentStatus); 
+                        break;
+                    case "CANCELLED": 
+                        allowed = "PENDING".equals(currentStatus) || "CONFIRMED".equals(currentStatus); 
+                        break;
+                    case "CHECKED_IN":
+                        allowed = ("PENDING".equals(currentStatus) && checkInDate != null && checkInDate.equals(today)) ||
+                                  "CONFIRMED".equals(currentStatus);
+                        break;
+                    case "CHECKED_OUT":
+                        allowed = "CONFIRMED".equals(currentStatus) && checkOutDate != null && !checkOutDate.isAfter(today);
+                        break;
                     case "COMPLETED":
-                        allowed = "PENDING".equals(currentStatus) || 
-                                 ("CONFIRMED".equals(currentStatus) && (checkOutDate == null || !checkOutDate.isAfter(today)));
+                        allowed = "CONFIRMED".equals(currentStatus);
                         break;
                 }
 
@@ -187,7 +196,7 @@ public class WebBookingHandler implements HttpHandler {
                         message = success ? "Status updated successfully" : "Update failed";
                     }
                 } else {
-                    message = "Action not allowed";
+                    message = "Action not allowed for status: " + currentStatus;
                 }
             } catch (SQLException e) {
                 e.printStackTrace();
