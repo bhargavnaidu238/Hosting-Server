@@ -59,10 +59,7 @@ public class HotelsHandler implements HttpHandler {
 
                 List<Map<String, Object>> hotels = new ArrayList<>();
 
-                String sql = "SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, " +
-                        "pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, " +
-                        "policies, rating, hotel_contact, about_this_property, hotel_images, customization, status " +
-                        "FROM hotels_info WHERE status = 'Active'";
+                String sql = "SELECT * FROM hotels_info WHERE status = 'Active'";
 
                 if (typeFilter != null && !typeFilter.trim().isEmpty()) {
                     sql += " AND hotel_type = ?";
@@ -87,20 +84,27 @@ public class HotelsHandler implements HttpHandler {
                     int cols = meta.getColumnCount();
 
                     while (rs.next()) {
+                        // Using LinkedHashMap to preserve order
                         Map<String, Object> row = new LinkedHashMap<>();
                         for (int i = 1; i <= cols; i++) {
                             String key = meta.getColumnLabel(i);
                             Object val = rs.getObject(i);
-                            
-                            // Standardizing key names to match Flutter's expectations
-                            if ("hotel_images".equalsIgnoreCase(key)) {
-                                row.put("Hotel_Images", buildImageCsv(rs.getString("hotel_images")));
-                            } else if ("room_price".equalsIgnoreCase(key)) {
-                                row.put("Room_Price", val == null ? "" : val.toString());
-                            } else if ("room_type".equalsIgnoreCase(key)) {
-                                row.put("Room_Type", val == null ? "" : val.toString());
+                            String valueStr = (val == null) ? "" : val.toString();
+
+                            // CRITICAL: Standardize keys for Flutter Room Selection logic
+                            if (key.equalsIgnoreCase("hotel_name")) {
+                                row.put("Hotel_Name", valueStr);
+                            } else if (key.equalsIgnoreCase("room_type")) {
+                                row.put("Room_Type", valueStr); // e.g. "Standard Room,Suite Room"
+                            } else if (key.equalsIgnoreCase("room_price")) {
+                                row.put("Room_Price", valueStr); // e.g. "1000,3000"
+                            } else if (key.equalsIgnoreCase("hotel_images")) {
+                                row.put("Hotel_Images", buildImageCsv(valueStr));
+                            } else if (key.equalsIgnoreCase("amenities")) {
+                                row.put("Amenities", valueStr);
                             } else {
-                                row.put(key, val == null ? "" : val);
+                                // Put original key as well for safety
+                                row.put(key, valueStr);
                             }
                         }
                         hotels.add(row);
@@ -180,25 +184,16 @@ public class HotelsHandler implements HttpHandler {
         }
     }
 
-    // FIXED: Better JSON serialization to prevent data corruption
     private String toJson(List<Map<String, Object>> list) {
         StringBuilder sb = new StringBuilder("[");
         for (int i = 0; i < list.size(); i++) {
             Map<String, Object> m = list.get(i);
             sb.append("{");
-            Iterator<Map.Entry<String, Object>> it = m.entrySet().iterator();
-            while (it.hasNext()) {
-                Map.Entry<String, Object> e = it.next();
-                sb.append("\"").append(escape(e.getKey())).append("\":");
-                
-                Object val = e.getValue();
-                if (val instanceof Number || val instanceof Boolean) {
-                    sb.append(val);
-                } else {
-                    sb.append("\"").append(escape(String.valueOf(val))).append("\"");
-                }
-                
-                if (it.hasNext()) sb.append(",");
+            int j = 0;
+            for (Map.Entry<String, Object> e : m.entrySet()) {
+                sb.append("\"").append(escape(e.getKey())).append("\":\"");
+                sb.append(escape(String.valueOf(e.getValue()))).append("\"");
+                if (j++ < m.size() - 1) sb.append(",");
             }
             sb.append("}");
             if (i < list.size() - 1) sb.append(",");
