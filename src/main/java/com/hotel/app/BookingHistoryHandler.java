@@ -17,7 +17,6 @@ import java.util.*;
 public class BookingHistoryHandler implements HttpHandler {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-
     private final DbConfig dbConfig;
 
     public BookingHistoryHandler(DbConfig dbConfig) {
@@ -45,9 +44,8 @@ public class BookingHistoryHandler implements HttpHandler {
         }
     }
 
-    // -------------------- GET HISTORY --------------------
+    // -------------------- GET HISTORY (FIXED LOGIC) --------------------
     private void handleBookingHistory(HttpExchange exchange) throws IOException {
-
         Map<String, String> params = decodeParams(exchange.getRequestURI().getQuery());
 
         String email = params.getOrDefault("email", "").trim();
@@ -76,52 +74,40 @@ public class BookingHistoryHandler implements HttpHandler {
             stmt.setString(2, userId);
 
             ResultSet rs = stmt.executeQuery();
-
             LocalDate today = LocalDate.now();
 
             while (rs.next()) {
+                LocalDate checkIn = rs.getDate("check_in_date") != null
+                        ? rs.getDate("check_in_date").toLocalDate() : null;
 
-                LocalDate checkIn =
-                        rs.getDate("check_in_date") != null
-                                ? rs.getDate("check_in_date").toLocalDate()
-                                : null;
-
-                LocalDate checkOut =
-                        rs.getDate("check_out_date") != null
-                                ? rs.getDate("check_out_date").toLocalDate()
-                                : null;
+                LocalDate checkOut = rs.getDate("check_out_date") != null
+                        ? rs.getDate("check_out_date").toLocalDate() : null;
 
                 String status = Optional.ofNullable(rs.getString("booking_status"))
-                        .orElse("")
-                        .trim()
-                        .toUpperCase();
+                        .orElse("").trim().toUpperCase();
 
                 boolean include = false;
 
                 if (showUpcoming) {
-                    /*
-                     UPCOMING:
-                     - Check-in today or future
-                     - Status Pending / Confirmed
+                    /* UPCOMING / ONGOING: 
+                       Include if the stay hasn't ended yet (checkout is today or later)
+                       AND it isn't already finalized (Cancelled/Completed)
                     */
-                    if (checkIn != null &&
-                            (status.equals("PENDING") || status.equals("CONFIRMED")) &&
-                            (checkIn.isEqual(today) || checkIn.isAfter(today))) {
+                    if (checkOut != null && 
+                       (status.equals("PENDING") || status.equals("CONFIRMED")) &&
+                       (checkOut.isEqual(today) || checkOut.isAfter(today))) {
                         include = true;
                     }
-
                 } else {
-                    /*
-                     PAST:
-                     - Checkout before today
-                     - OR completed / cancelled
-                     - OR checkout NULL but check-in in the past
+                    /* PAST: 
+                       Include if checkout date is strictly in the past
+                       OR the booking is explicitly finished (Completed/Cancelled)
                     */
                     if (checkOut != null && checkOut.isBefore(today)) {
                         include = true;
-                    } else if (checkOut == null && checkIn != null && checkIn.isBefore(today)) {
-                        include = true;
                     } else if (status.equals("COMPLETED") || status.equals("CANCELLED")) {
+                        include = true;
+                    } else if (checkOut == null && checkIn != null && checkIn.isBefore(today)) {
                         include = true;
                     }
                 }
@@ -231,10 +217,8 @@ public class BookingHistoryHandler implements HttpHandler {
 
         for (int i = 1; i <= meta.getColumnCount(); i++) {
             Object value = rs.getObject(i);
-
             if (value instanceof java.sql.Date date)
                 value = date.toLocalDate().toString();
-
             row.put(meta.getColumnLabel(i), value);
         }
         return row;
@@ -245,18 +229,16 @@ public class BookingHistoryHandler implements HttpHandler {
         if (query == null) return map;
 
         for (String p : query.split("&")) {
-            String[] pair = p.split("=", 2); // <-- IMPORTANT: split once
+            String[] pair = p.split("=", 2);
             if (pair.length == 2) {
                 String key = URLDecoder.decode(pair[0], StandardCharsets.UTF_8);
                 String value = URLDecoder.decode(pair[1], StandardCharsets.UTF_8)
-                        .replaceAll("[\\s\\r\\n]+$", "") // remove trailing HTTP artifacts
-                        .trim();
+                        .replaceAll("[\\s\\r\\n]+$", "").trim();
                 map.put(key, value);
             }
         }
         return map;
     }
-
 
     private void sendResponse(HttpExchange ex, int code, Object body) throws IOException {
         String json = body instanceof String ? (String) body : objectMapper.writeValueAsString(body);
