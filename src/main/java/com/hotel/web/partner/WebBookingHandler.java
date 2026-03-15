@@ -181,10 +181,13 @@ public class WebBookingHandler implements HttpHandler {
                                   "CONFIRMED".equals(currentStatus);
                         break;
                     case "CHECKED_OUT":
-                        allowed = "CONFIRMED".equals(currentStatus) && checkOutDate != null && !checkOutDate.isAfter(today);
+                        // Fixed: Allowed if status is CONFIRMED or already CHECKED_IN
+                        allowed = ("CONFIRMED".equals(currentStatus) || "CHECKED_IN".equals(currentStatus)) 
+                                  && checkOutDate != null && !checkOutDate.isAfter(today);
                         break;
                     case "COMPLETED":
-                        allowed = "CONFIRMED".equals(currentStatus);
+                        // Fixed: Allowed if status is CONFIRMED or CHECKED_IN
+                        allowed = "CONFIRMED".equals(currentStatus) || "CHECKED_IN".equals(currentStatus);
                         break;
                 }
 
@@ -196,7 +199,7 @@ public class WebBookingHandler implements HttpHandler {
                         message = success ? "Status updated successfully" : "Update failed";
                     }
                 } else {
-                    message = "Action not allowed for status: " + currentStatus;
+                    message = "Action " + newStatus + " not allowed for current status: " + currentStatus;
                 }
             } catch (SQLException e) {
                 e.printStackTrace();
