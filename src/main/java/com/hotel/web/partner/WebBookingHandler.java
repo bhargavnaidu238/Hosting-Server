@@ -181,13 +181,14 @@ public class WebBookingHandler implements HttpHandler {
                                   "CONFIRMED".equals(currentStatus);
                         break;
                     case "CHECKED_OUT":
-                        // Fixed: Allowed if status is CONFIRMED or already CHECKED_IN
                         allowed = ("CONFIRMED".equals(currentStatus) || "CHECKED_IN".equals(currentStatus)) 
                                   && checkOutDate != null && !checkOutDate.isAfter(today);
                         break;
                     case "COMPLETED":
-                        // Fixed: Allowed if status is CONFIRMED or CHECKED_IN
-                        allowed = "CONFIRMED".equals(currentStatus) || "CHECKED_IN".equals(currentStatus);
+                        // Final Fix: Allowed if status is CONFIRMED, CHECKED_IN, or CHECKED_OUT
+                        allowed = "CONFIRMED".equals(currentStatus) || 
+                                  "CHECKED_IN".equals(currentStatus) || 
+                                  "CHECKED_OUT".equals(currentStatus);
                         break;
                 }
 
