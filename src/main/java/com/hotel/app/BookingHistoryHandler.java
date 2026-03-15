@@ -90,24 +90,21 @@ public class BookingHistoryHandler implements HttpHandler {
 
                 if (showUpcoming) {
                     /* UPCOMING / ONGOING: 
-                       Include if the stay hasn't ended yet (checkout is today or later)
-                       AND it isn't already finalized (Cancelled/Completed)
+                       Include if checkout is today or later AND status is not Cancelled.
+                       This ensures Checked-in and even today's Completed bookings stay visible.
                     */
-                    if (checkOut != null && 
-                       (status.equals("PENDING") || status.equals("CONFIRMED")) &&
+                    if (checkOut != null && !status.equals("CANCELLED") &&
                        (checkOut.isEqual(today) || checkOut.isAfter(today))) {
                         include = true;
                     }
                 } else {
                     /* PAST: 
                        Include if checkout date is strictly in the past
-                       OR the booking is explicitly finished (Completed/Cancelled)
+                       OR the booking is explicitly Cancelled.
                     */
                     if (checkOut != null && checkOut.isBefore(today)) {
                         include = true;
-                    } else if (status.equals("COMPLETED") || status.equals("CANCELLED")) {
-                        include = true;
-                    } else if (checkOut == null && checkIn != null && checkIn.isBefore(today)) {
+                    } else if (status.equals("CANCELLED")) {
                         include = true;
                     }
                 }
@@ -138,13 +135,14 @@ public class BookingHistoryHandler implements HttpHandler {
         }
 
         String fetchSql = "SELECT room_price_per_day, gst FROM bookings_info WHERE booking_id=?";
+        // Explicit cast added for booking_status_enum
         String updateSql = """
                 UPDATE bookings_info SET
                 check_in_date=?, 
                 check_out_date=?, 
                 total_days_at_stay=?, 
                 final_payable_amount=?,
-                booking_status='PENDING'
+                booking_status='PENDING'::booking_status_enum
                 WHERE booking_id=?
                 """;
 
@@ -195,7 +193,8 @@ public class BookingHistoryHandler implements HttpHandler {
             return;
         }
 
-        String sql = "UPDATE bookings_info SET booking_status='CANCELLED', refund_status='Refund Initiated' WHERE booking_id=?";
+        // Explicit cast added for booking_status_enum
+        String sql = "UPDATE bookings_info SET booking_status='CANCELLED'::booking_status_enum, refund_status='Refund Initiated' WHERE booking_id=?";
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -210,7 +209,7 @@ public class BookingHistoryHandler implements HttpHandler {
         }
     }
 
-    // -------------------- MAP DB → JSON --------------------
+    // -------------------- MAP DB -> JSON --------------------
     private Map<String, Object> mapRow(ResultSet rs) throws SQLException {
         Map<String, Object> row = new LinkedHashMap<>();
         ResultSetMetaData meta = rs.getMetaData();
@@ -242,9 +241,10 @@ public class BookingHistoryHandler implements HttpHandler {
 
     private void sendResponse(HttpExchange ex, int code, Object body) throws IOException {
         String json = body instanceof String ? (String) body : objectMapper.writeValueAsString(body);
+        ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
-        ex.sendResponseHeaders(code, json.getBytes().length);
-        try (OutputStream os = ex.getResponseBody()) { os.write(json.getBytes()); }
+        ex.sendResponseHeaders(code, json.getBytes(StandardCharsets.UTF_8).length);
+        try (OutputStream os = ex.getResponseBody()) { os.write(json.getBytes(StandardCharsets.UTF_8)); }
     }
 
     private Map<String, Object> json(String k, Object v) {
