@@ -101,6 +101,22 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
             </plugin>
+            
+            <plugin>
+	            <groupId>org.springframework.boot</groupId>
+	            <artifactId>spring-boot-maven-plugin</artifactId>
+        	</plugin>
+
+        	<plugin>
+	            <artifactId>maven-jar-plugin</artifactId>
+	            <configuration>
+	                <excludes>
+	                    <exclude>META-INF/*.SF</exclude>
+	                    <exclude>META-INF/*.DSA</exclude>
+	                    <exclude>META-INF/*.RSA</exclude>
+	                </excludes>
+	            </configuration>
+        	</plugin>
 
             <!-- FAT JAR -->
             <plugin>
