@@ -153,7 +153,7 @@ public class BookingHandler implements HttpHandler {
                 ps.setInt(33, toInt(data.getOrDefault("months", 1)));
                 ps.setString(34, str(data.get("hotel_address")));
                 ps.setString(35, str(data.get("hotel_contact")));
-                ps.setString(36, bookingStatus); // CONFIRMED or PENDING
+                ps.setString(36, bookingStatus); 
                 ps.setString(37, str(data.get("last_payment_record_id")));
 
                 ps.executeUpdate();
