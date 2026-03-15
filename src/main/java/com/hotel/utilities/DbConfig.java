@@ -22,6 +22,9 @@ public final class DbConfig {
     
     private final String supabaseurl;
     private final String anonKey;
+    
+    private final String emailapiKey;
+    private final String senderemailaddress;
 
     // ===== Lazy DataSources =====
     private volatile HikariDataSource customerDataSource;
@@ -45,6 +48,9 @@ public final class DbConfig {
         
         this.supabaseurl        = getEnv("SUPABASE_URL");
         this.anonKey  = getEnv("ANON_KEY");
+        
+        this.emailapiKey        = getEnv("EMAIL_NOTIFICATION_API");
+        this.senderemailaddress  = getEnv("SENDER_EMAIL");
 
         System.out.println("DB CONFIG LOADED");
         System.out.println("CUSTOMER_DB_URL = " + customerDbUrl);
@@ -170,6 +176,14 @@ public final class DbConfig {
 
     public String getAnonKey() {
         return anonKey;
+    }
+    
+    public String getEmailApiKey() {
+        return emailapiKey;
+    }
+
+    public String getSenderEmail() {
+        return senderemailaddress;
     }
 
     // ===== Shutdown =====

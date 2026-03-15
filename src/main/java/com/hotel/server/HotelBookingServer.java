@@ -22,6 +22,7 @@ import com.hotel.app.PgsHandler;
 import com.hotel.app.ProfileHandler;
 import com.hotel.app.RegisterHandler;
 import com.hotel.app.RewardsWalletHandler;
+import com.hotel.notification.service.EmailHandler;
 import com.hotel.utilities.DbConfig;
 import com.hotel.utilities.HotelImagesHandler;
 import com.hotel.web.finance.GetPartnerFinanceHandler;
@@ -112,6 +113,9 @@ public class HotelBookingServer {
         server.createContext("/updateBankDetails", new UpdateBankDetailsHandler(dbConfig));
         server.createContext("/requestPayout", new RequestPayoutHandler(dbConfig));
         server.createContext("/getPartnerTransactions", new GetPartnerTransactionsHandler(dbConfig));
+        
+     // ========== Notification Service ==========
+        server.createContext("/send-email", new EmailHandler());
 
 
 
