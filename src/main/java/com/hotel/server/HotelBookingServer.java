@@ -116,6 +116,8 @@ public class HotelBookingServer {
         
      // ========== Notification Service ==========
         server.createContext("/send-email", new EmailHandler(dbConfig));
+        server.createContext("/send-email-otp", new EmailHandler(dbConfig));
+        server.createContext("/verify-email-otp", new EmailHandler(dbConfig));
 
 
 

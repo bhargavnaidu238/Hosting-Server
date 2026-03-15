@@ -34,42 +34,105 @@ public class EmailHandler implements HttpHandler {
 
         try {
 
-            // Read request body
             InputStream requestBody = exchange.getRequestBody();
 
             Map<String, String> body =
                     mapper.readValue(requestBody, Map.class);
 
-            String recipientEmail = body.get("email");
+            String email = body.getOrDefault("email", "").trim();
+            String type = body.getOrDefault("type", "").trim().toLowerCase();
+            String otp = body.getOrDefault("otp", "").trim();
+            String partnerName = body.getOrDefault("partnerName", "Partner");
+
+            if (email.isEmpty()) {
+                sendResponse(exchange, 400, "Email is required");
+                return;
+            }
 
             EmailService emailService =
                     new EmailService(EMAIL_API_KEY, EMAIL_SENDER);
 
-            emailService.sendEmail(
-                    recipientEmail,
-                    "Welcome to Hotel Booking App",
-                    "Your account was created successfully."
-            );
+            String subject;
+            String message;
 
-            String response = "Email sent successfully";
+            /*
+             * ========================================
+             * OTP EMAIL TEMPLATE
+             * ========================================
+             */
+            if ("otp".equals(type)) {
 
-            exchange.sendResponseHeaders(200, response.getBytes().length);
+                subject = "Email Verification OTP - Hotel Booking Portal";
 
-            OutputStream os = exchange.getResponseBody();
-            os.write(response.getBytes());
-            os.close();
+                message =
+                        "Hello,\n\n" +
+                        "Your Email Verification OTP is: " + otp + "\n\n" +
+                        "This OTP is valid for 5 minutes.\n\n" +
+                        "If you did not request this verification, please ignore this email.\n\n" +
+                        "Regards,\n" +
+                        "Hotel Booking Team";
+
+                emailService.sendEmail(email, subject, message);
+            }
+
+            /*
+             * ========================================
+             * WELCOME EMAIL TEMPLATE
+             * ========================================
+             */
+            else if ("welcome".equals(type)) {
+
+                subject = "Welcome to Hotel Booking Partner Portal";
+
+                message =
+                        "Hello " + partnerName + ",\n\n" +
+                        "Welcome to the Hotel Booking Partner Portal!\n\n" +
+                        "Your registration has been successfully completed.\n\n" +
+                        "You can now login and start managing your hotel listings.\n\n" +
+                        "We are excited to have you onboard.\n\n" +
+                        "Regards,\n" +
+                        "Hotel Booking Team";
+
+                emailService.sendEmail(email, subject, message);
+            }
+
+            /*
+             * ========================================
+             * GENERIC EMAIL (fallback)
+             * ========================================
+             */
+            else {
+
+                subject = "Hotel Booking Notification";
+
+                message =
+                        "Hello,\n\n" +
+                        "This is a notification from Hotel Booking Portal.\n\n" +
+                        "Regards,\n" +
+                        "Hotel Booking Team";
+
+                emailService.sendEmail(email, subject, message);
+            }
+
+            sendResponse(exchange, 200, "Email sent successfully");
 
         } catch (Exception e) {
 
-            String response = "Failed to send email";
-
-            exchange.sendResponseHeaders(500, response.getBytes().length);
-
-            OutputStream os = exchange.getResponseBody();
-            os.write(response.getBytes());
-            os.close();
-
             e.printStackTrace();
+
+            sendResponse(exchange, 500, "Failed to send email");
         }
+    }
+
+    private void sendResponse(HttpExchange exchange, int status, String message)
+            throws IOException {
+
+        byte[] response = message.getBytes();
+
+        exchange.sendResponseHeaders(status, response.length);
+
+        OutputStream os = exchange.getResponseBody();
+        os.write(response);
+        os.close();
     }
 }

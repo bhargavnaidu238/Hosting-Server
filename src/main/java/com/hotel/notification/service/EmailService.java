@@ -25,7 +25,13 @@ public class EmailService {
         }
     }
 
-    public void sendEmail(String recipientEmail, String subject, String body) throws IOException {
+    /*
+     * ========================================
+     * GENERIC EMAIL SENDER (USED BY EmailHandler)
+     * ========================================
+     */
+    public void sendEmail(String recipientEmail, String subject, String body)
+            throws IOException {
 
         Email from = new Email(senderEmail);
         Email to = new Email(recipientEmail);
@@ -43,7 +49,10 @@ public class EmailService {
 
         Response response = sendGrid.api(request);
 
+        System.out.println("====================================");
         System.out.println("Email sent to: " + recipientEmail);
+        System.out.println("Subject: " + subject);
         System.out.println("SendGrid Status Code: " + response.getStatusCode());
+        System.out.println("====================================");
     }
 }
