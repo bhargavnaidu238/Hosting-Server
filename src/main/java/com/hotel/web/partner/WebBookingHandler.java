@@ -198,7 +198,7 @@ public class WebBookingHandler implements HttpHandler {
         }
 
         String bookingId = params.getOrDefault("bookingId", "").trim();
-        String newStatus = params.getOrDefault("status", "").trim().toUpperCase(); // ✅ FORCE UPPERCASE
+        String newStatus = params.getOrDefault("status", "").trim().toUpperCase();
 
         boolean success = false;
         String message = "";
@@ -221,7 +221,8 @@ public class WebBookingHandler implements HttpHandler {
                         currentStatus = rs.getString("booking_status").toUpperCase();
                         String checkOut = rs.getString("check_out_date");
                         if (checkOut != null && !checkOut.isEmpty()) {
-                            checkOutDate = LocalDate.parse(checkOut);
+                            // Trim in case of timestamp format
+                            checkOutDate = LocalDate.parse(checkOut.split(" ")[0]);
                         }
                     }
                 }
@@ -237,21 +238,21 @@ public class WebBookingHandler implements HttpHandler {
                         allowed = "PENDING".equals(currentStatus) || "CONFIRMED".equals(currentStatus);
                         break;
                     case "COMPLETED":
-                        allowed = "CONFIRMED".equals(currentStatus)
-                                && checkOutDate != null
-                                && !checkOutDate.isAfter(today);
+                        // Fixed: Allowed if PENDING (per your request) or if CONFIRMED and stay is over/ongoing
+                        allowed = "PENDING".equals(currentStatus) || 
+                                 ("CONFIRMED".equals(currentStatus) && (checkOutDate == null || !checkOutDate.isAfter(today)));
                         break;
                 }
 
                 if (allowed) {
                     try (PreparedStatement updateStmt = conn.prepareStatement(updateSql)) {
-                        updateStmt.setString(1, newStatus); // ✅ ALWAYS UPPERCASE IN DB
+                        updateStmt.setString(1, newStatus);
                         updateStmt.setString(2, bookingId);
                         success = updateStmt.executeUpdate() > 0;
                         message = success ? "Status updated successfully" : "Update failed";
                     }
                 } else {
-                    message = "Action not allowed";
+                    message = "Action not allowed for current status: " + currentStatus;
                 }
 
             } catch (SQLException e) {
