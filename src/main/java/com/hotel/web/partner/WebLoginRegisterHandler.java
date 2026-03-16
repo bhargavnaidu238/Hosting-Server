@@ -189,7 +189,6 @@ public class WebLoginRegisterHandler implements HttpHandler {
     }
 
  // ================== REGISTER ==================
- // ================== REGISTER ==================
     private void handleRegister(HttpExchange exchange, Map<String, String> params)
             throws IOException, SQLException {
 
@@ -207,7 +206,6 @@ public class WebLoginRegisterHandler implements HttpHandler {
         String otp = params.getOrDefault("otp", "").trim();
 
         List<String> missingFields = new ArrayList<>();
-
         if (partnerName.isEmpty()) missingFields.add("partner_name");
         if (businessName.isEmpty()) missingFields.add("business_name");
         if (email.isEmpty()) missingFields.add("email");
@@ -222,173 +220,135 @@ public class WebLoginRegisterHandler implements HttpHandler {
         if (otp.isEmpty()) missingFields.add("otp");
 
         if (!missingFields.isEmpty()) {
-            sendResponse(exchange, 400,
-                    "{\"status\":\"error\",\"missing_fields\":" + missingFields + "}");
+            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Missing fields\",\"fields\":" + missingFields + "}");
             return;
         }
 
         String hashedPassword = PasswordUtil.hashPassword(rawPassword);
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+            conn.setAutoCommit(false); // Start Transaction
 
-            /*
-             * ===============================
-             * VERIFY EMAIL OTP
-             * ===============================
-             */
-            String otpQuery =
-                    "SELECT otp_code, attempts, otp_expiry " +
-                    "FROM email_verification_otp WHERE email = ?";
-
-            try (PreparedStatement otpStmt = conn.prepareStatement(otpQuery)) {
-
-                otpStmt.setString(1, email);
-
-                try (ResultSet rs = otpStmt.executeQuery()) {
-
-                    if (!rs.next()) {
-                        sendResponse(exchange, 400,
-                                "{\"status\":\"error\",\"message\":\"OTP not requested for this email\"}");
-                        return;
-                    }
-
-                    String storedOtp = rs.getString("otp_code");
-                    int attempts = rs.getInt("attempts");
-                    Timestamp expiry = rs.getTimestamp("otp_expiry");
-
-                    if (attempts >= 3) {
-                        sendResponse(exchange, 403,
-                                "{\"status\":\"error\",\"message\":\"Maximum OTP attempts reached\"}");
-                        return;
-                    }
-
-                    if (expiry.before(new Timestamp(System.currentTimeMillis()))) {
-                        sendResponse(exchange, 400,
-                                "{\"status\":\"error\",\"message\":\"OTP expired\"}");
-                        return;
-                    }
-
-                    if (!storedOtp.equalsIgnoreCase(otp)) {
-
-                        String updateAttempts =
-                                "UPDATE email_verification_otp SET attempts = attempts + 1 WHERE email=?";
-
-                        try (PreparedStatement attemptStmt =
-                                     conn.prepareStatement(updateAttempts)) {
-
-                            attemptStmt.setString(1, email);
-                            attemptStmt.executeUpdate();
+            try {
+                /* ===============================
+                 * 1. VERIFY OTP
+                 * =============================== */
+                String otpQuery = "SELECT otp_code, attempts, otp_expiry FROM email_verification_otp WHERE email = ?";
+                try (PreparedStatement otpStmt = conn.prepareStatement(otpQuery)) {
+                    otpStmt.setString(1, email);
+                    try (ResultSet rs = otpStmt.executeQuery()) {
+                        if (!rs.next()) {
+                            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"OTP not requested\"}");
+                            return;
                         }
 
-                        sendResponse(exchange, 401,
-                                "{\"status\":\"error\",\"message\":\"Invalid OTP\"}");
-                        return;
+                        String storedOtp = rs.getString("otp_code");
+                        int attempts = rs.getInt("attempts");
+                        Timestamp expiry = rs.getTimestamp("otp_expiry");
+
+                        if (attempts >= 3) {
+                            sendResponse(exchange, 403, "{\"status\":\"error\",\"message\":\"Maximum attempts reached. Request a new OTP.\"}");
+                            return;
+                        }
+
+                        if (expiry.before(new Timestamp(System.currentTimeMillis()))) {
+                            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"OTP expired\"}");
+                            return;
+                        }
+
+                        if (!storedOtp.equals(otp)) {
+                            String updateAttempts = "UPDATE email_verification_otp SET attempts = attempts + 1 WHERE email=?";
+                            try (PreparedStatement attStmt = conn.prepareStatement(updateAttempts)) {
+                                attStmt.setString(1, email);
+                                attStmt.executeUpdate();
+                            }
+                            conn.commit(); // Save the attempt count even if OTP fails
+                            sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Invalid OTP\"}");
+                            return;
+                        }
                     }
                 }
-            }
 
-            /*
-             * ===============================
-             * CHECK IF EMAIL EXISTS
-             * ===============================
-             */
-            String checkQuery =
-                    "SELECT partner_id FROM partner_data WHERE LOWER(email)=?";
-
-            try (PreparedStatement checkStmt = conn.prepareStatement(checkQuery)) {
-
-                checkStmt.setString(1, email);
-
-                try (ResultSet rs = checkStmt.executeQuery()) {
-
-                    if (rs.next()) {
-                        sendResponse(exchange, 409,
-                                "{\"status\":\"error\",\"message\":\"Email already registered\"}");
-                        return;
+                /* ===============================
+                 * 2. CHECK IF EMAIL EXISTS
+                 * =============================== */
+                String checkQuery = "SELECT partner_id FROM partner_data WHERE LOWER(email)=?";
+                try (PreparedStatement checkStmt = conn.prepareStatement(checkQuery)) {
+                    checkStmt.setString(1, email);
+                    try (ResultSet rs = checkStmt.executeQuery()) {
+                        if (rs.next()) {
+                            sendResponse(exchange, 409, "{\"status\":\"error\",\"message\":\"Email already registered\"}");
+                            return;
+                        }
                     }
                 }
-            }
 
-            /*
-             * ===============================
-             * INSERT USER
-             * ===============================
-             */
-            String uniqueID = "PR" + (new Random().nextInt(90000) + 10000);
-            Timestamp registrationDate =
-                    new Timestamp(System.currentTimeMillis());
+                /* ===============================
+                 * 3. INSERT USER
+                 * =============================== */
+                String uniqueID = "PR" + (new Random().nextInt(90000) + 10000);
+                Timestamp registrationDate = new Timestamp(System.currentTimeMillis());
 
-            String insertQuery =
-                    "INSERT INTO partner_data " +
-                            "(partner_id, partner_name, business_name, email, password, contact_number, " +
-                            "address, city, state, country, pincode, gst_number, registration_date, user_status) " +
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                String insertQuery = "INSERT INTO partner_data (partner_id, partner_name, business_name, email, password, " +
+                        "contact_number, address, city, state, country, pincode, gst_number, registration_date, user_status) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-            try (PreparedStatement insertStmt = conn.prepareStatement(insertQuery)) {
+                try (PreparedStatement insertStmt = conn.prepareStatement(insertQuery)) {
+                    insertStmt.setString(1, uniqueID);
+                    insertStmt.setString(2, partnerName);
+                    insertStmt.setString(3, businessName);
+                    insertStmt.setString(4, email);
+                    insertStmt.setString(5, hashedPassword);
+                    insertStmt.setString(6, contactNumber);
+                    insertStmt.setString(7, address);
+                    insertStmt.setString(8, city);
+                    insertStmt.setString(9, state);
+                    insertStmt.setString(10, country);
+                    insertStmt.setString(11, pincode);
+                    insertStmt.setString(12, gstNumber);
+                    insertStmt.setTimestamp(13, registrationDate);
+                    insertStmt.setString(14, "Active");
+                    insertStmt.executeUpdate();
+                }
 
-                insertStmt.setString(1, uniqueID);
-                insertStmt.setString(2, partnerName);
-                insertStmt.setString(3, businessName);
-                insertStmt.setString(4, email);
-                insertStmt.setString(5, hashedPassword);
-                insertStmt.setString(6, contactNumber);
-                insertStmt.setString(7, address);
-                insertStmt.setString(8, city);
-                insertStmt.setString(9, state);
-                insertStmt.setString(10, country);
-                insertStmt.setString(11, pincode);
-                insertStmt.setString(12, gstNumber);
-                insertStmt.setTimestamp(13, registrationDate);
-                insertStmt.setString(14, "Active");
+                /* ===============================
+                 * 4. CLEANUP OTP
+                 * =============================== */
+                String deleteOtp = "DELETE FROM email_verification_otp WHERE email=?";
+                try (PreparedStatement deleteStmt = conn.prepareStatement(deleteOtp)) {
+                    deleteStmt.setString(1, email);
+                    deleteStmt.executeUpdate();
+                }
 
-                insertStmt.executeUpdate();
-            }
+                conn.commit(); // Finalize all database changes
 
-            /*
-             * ===============================
-             * DELETE OTP
-             * ===============================
-             */
-            String deleteOtp = "DELETE FROM email_verification_otp WHERE email=?";
+                /* ===============================
+                 * 5. ASYNC EMAIL TRIGGER
+                 * =============================== */
+                new Thread(() -> {
+                    try {
+                        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                        String subject = "Welcome to Hotel Booking Partner Portal";
+                        String body = "Hello " + partnerName + ",\n\nYour registration is successful. ID: " + uniqueID;
+                        emailService.sendEmail(email, subject, body);
+                    } catch (Exception e) {
+                        System.err.println("Async Email Failed: " + e.getMessage());
+                    }
+                }).start();
 
-            try (PreparedStatement deleteStmt =
-                         conn.prepareStatement(deleteOtp)) {
-
-                deleteStmt.setString(1, email);
-                deleteStmt.executeUpdate();
-            }
-
-            /*
-             * ===============================
-             * SEND WELCOME EMAIL
-             * ===============================
-             */
-            try {
-
-                EmailService emailService =
-                        new EmailService(
-                                dbConfig.getEmailApiKey(),
-                                dbConfig.getSenderEmail()
-                        );
-
-                String subject = "Welcome to Hotel Booking Partner Portal";
-
-                String body =
-                        "Hello " + partnerName + ",\n\n"
-                        + "Welcome to the Hotel Booking Partner Portal!\n\n"
-                        + "Your registration has been completed successfully.\n\n"
-                        + "You can now login and start managing your hotel listings.\n\n"
-                        + "Regards,\nHotel Booking Team";
-
-                emailService.sendEmail(email, subject, body);
+                sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"Registration successful\"}");
 
             } catch (Exception e) {
-                System.out.println("Email sending failed: " + e.getMessage());
+                conn.rollback(); // Undo everything if any step fails
+                throw e;
             }
         }
+    }
 
-        sendResponse(exchange, 200,
-                "{\"status\":\"success\",\"message\":\"Registration successful\"}");
+    // Helper method to ensure capitalization doesn't crash on null
+    private String capitalize(String str) {
+        if (str == null || str.trim().isEmpty()) return "";
+        return str.substring(0, 1).toUpperCase() + str.substring(1).toLowerCase();
     }
     
     // ================== FORGOT PASSWORD ==================
@@ -418,12 +378,6 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
         sendResponse(exchange, 200,
                 "{\"status\":\"success\",\"message\":\"Password updated successfully\"}");
-    }
-
-    // ================== UTIL ==================
-    private String capitalize(String str) {
-        if (str == null || str.isEmpty()) return str;
-        return str.substring(0, 1).toUpperCase() + str.substring(1);
     }
 
     private Map<String, String> parseForm(String body) throws UnsupportedEncodingException {

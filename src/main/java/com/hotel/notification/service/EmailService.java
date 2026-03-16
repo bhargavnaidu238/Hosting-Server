@@ -1,7 +1,6 @@
 package com.hotel.notification.service;
 
 import java.io.IOException;
-
 import com.sendgrid.Method;
 import com.sendgrid.Request;
 import com.sendgrid.Response;
@@ -12,47 +11,52 @@ import com.sendgrid.helpers.mail.objects.Email;
 
 public class EmailService {
 
-    private final String apiKey;
     private final String senderEmail;
+    private final SendGrid sendGrid;
+	private String apiKey;
 
     public EmailService(String apiKey, String senderEmail) {
-
-        this.apiKey = apiKey;
-        this.senderEmail = senderEmail;
-
-        if (apiKey == null || senderEmail == null) {
-            throw new RuntimeException("Email configuration is missing!");
+        if (apiKey == null || apiKey.isEmpty() || senderEmail == null || senderEmail.isEmpty()) {
+            throw new RuntimeException("Email configuration (API Key or Sender) is missing!");
         }
+        this.apiKey = apiKey; // Keeping reference if needed
+        this.senderEmail = senderEmail;
+        // Initialize SendGrid client once
+        this.sendGrid = new SendGrid(apiKey);
     }
 
-    /*
-     * ========================================
-     * GENERIC EMAIL SENDER (USED BY EmailHandler)
-     * ========================================
+    /**
+     * Sends an email using SendGrid.
+     * Supports both plain text and HTML if needed.
      */
-    public void sendEmail(String recipientEmail, String subject, String body)
-            throws IOException {
-
+    public void sendEmail(String recipientEmail, String subject, String body) throws IOException {
         Email from = new Email(senderEmail);
         Email to = new Email(recipientEmail);
-
+        
+        // Use text/html if you want to send styled emails later, otherwise text/plain is fine.
         Content content = new Content("text/plain", body);
-
         Mail mail = new Mail(from, subject, to, content);
 
-        SendGrid sendGrid = new SendGrid(apiKey);
-
         Request request = new Request();
-        request.setMethod(Method.POST);
-        request.setEndpoint("mail/send");
-        request.setBody(mail.build());
+        try {
+            request.setMethod(Method.POST);
+            request.setEndpoint("mail/send");
+            request.setBody(mail.build());
 
-        Response response = sendGrid.api(request);
+            Response response = sendGrid.api(request);
 
-        System.out.println("====================================");
-        System.out.println("Email sent to: " + recipientEmail);
-        System.out.println("Subject: " + subject);
-        System.out.println("SendGrid Status Code: " + response.getStatusCode());
-        System.out.println("====================================");
+            // SendGrid success code for "Accepted" is 202
+            if (response.getStatusCode() >= 200 && response.getStatusCode() < 300) {
+                System.out.println("[EmailService] Success: Email sent to " + recipientEmail + 
+                                   " (Status: " + response.getStatusCode() + ")");
+            } else {
+                // IMPORTANT: Throwing an exception so the Handler knows it failed
+                throw new IOException("SendGrid failure. Status: " + response.getStatusCode() + 
+                                      " Body: " + response.getBody());
+            }
+        } catch (IOException ex) {
+            System.err.println("[EmailService] Error sending email: " + ex.getMessage());
+            throw ex; // Rethrow to let the caller handle the failure logic
+        }
     }
 }

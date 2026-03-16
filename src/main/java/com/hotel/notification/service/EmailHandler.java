@@ -8,131 +8,101 @@ import com.sun.net.httpserver.HttpHandler;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.sql.*;
 import java.util.Map;
+import java.util.Random;
 
 public class EmailHandler implements HttpHandler {
 
     private final DbConfig dbConfig;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    private final String EMAIL_API_KEY;
-    private final String EMAIL_SENDER;
-
     public EmailHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
-        this.EMAIL_API_KEY = dbConfig.getEmailApiKey();
-        this.EMAIL_SENDER = dbConfig.getSenderEmail();
     }
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-
         if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
-            exchange.sendResponseHeaders(405, -1);
+            sendResponse(exchange, 405, "{\"status\":\"error\",\"message\":\"Method not allowed\"}");
             return;
         }
 
-        try {
+        try (InputStream is = exchange.getRequestBody()) {
+            Map<String, String> body = mapper.readValue(is, Map.class);
+            String type = body.getOrDefault("type", "").toLowerCase();
+            String email = body.getOrDefault("email", "").trim().toLowerCase();
 
-            InputStream requestBody = exchange.getRequestBody();
-
-            Map<String, String> body =
-                    mapper.readValue(requestBody, Map.class);
-
-            String email = body.getOrDefault("email", "").trim();
-            String type = body.getOrDefault("type", "").trim().toLowerCase();
-            String otp = body.getOrDefault("otp", "").trim();
-            String partnerName = body.getOrDefault("partnerName", "Partner");
-
-            if (email.isEmpty()) {
-                sendResponse(exchange, 400, "Email is required");
-                return;
+            if ("send_otp".equals(type)) {
+                handleSendOtp(exchange, email);
+            } else if ("verify_otp".equals(type)) {
+                handleVerifyOtp(exchange, email, body.getOrDefault("otp", ""));
+            } else {
+                sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Invalid type\"}");
             }
-
-            EmailService emailService =
-                    new EmailService(EMAIL_API_KEY, EMAIL_SENDER);
-
-            String subject;
-            String message;
-
-            /*
-             * ========================================
-             * OTP EMAIL TEMPLATE
-             * ========================================
-             */
-            if ("otp".equals(type)) {
-
-                subject = "Email Verification OTP - Hotel Booking Portal";
-
-                message =
-                        "Hello,\n\n" +
-                        "Your Email Verification OTP is: " + otp + "\n\n" +
-                        "This OTP is valid for 5 minutes.\n\n" +
-                        "If you did not request this verification, please ignore this email.\n\n" +
-                        "Regards,\n" +
-                        "Hotel Booking Team";
-
-                emailService.sendEmail(email, subject, message);
-            }
-
-            /*
-             * ========================================
-             * WELCOME EMAIL TEMPLATE
-             * ========================================
-             */
-            else if ("welcome".equals(type)) {
-
-                subject = "Welcome to Hotel Booking Partner Portal";
-
-                message =
-                        "Hello " + partnerName + ",\n\n" +
-                        "Welcome to the Hotel Booking Partner Portal!\n\n" +
-                        "Your registration has been successfully completed.\n\n" +
-                        "You can now login and start managing your hotel listings.\n\n" +
-                        "We are excited to have you onboard.\n\n" +
-                        "Regards,\n" +
-                        "Hotel Booking Team";
-
-                emailService.sendEmail(email, subject, message);
-            }
-
-            /*
-             * ========================================
-             * GENERIC EMAIL (fallback)
-             * ========================================
-             */
-            else {
-
-                subject = "Hotel Booking Notification";
-
-                message =
-                        "Hello,\n\n" +
-                        "This is a notification from Hotel Booking Portal.\n\n" +
-                        "Regards,\n" +
-                        "Hotel Booking Team";
-
-                emailService.sendEmail(email, subject, message);
-            }
-
-            sendResponse(exchange, 200, "Email sent successfully");
-
         } catch (Exception e) {
-
             e.printStackTrace();
-
-            sendResponse(exchange, 500, "Failed to send email");
+            sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"Internal Server Error\"}");
         }
     }
 
-    private void sendResponse(HttpExchange exchange, int status, String message)
-            throws IOException {
+    private void handleSendOtp(HttpExchange exchange, String email) throws Exception {
+        // 1. Generate 6-digit OTP
+        String otp = String.valueOf(new Random().nextInt(900000) + 100000);
+        Timestamp expiry = new Timestamp(System.currentTimeMillis() + (5 * 60 * 1000)); // 5 mins
 
-        byte[] response = message.getBytes();
+        // 2. Save to Database
+        try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+            String query = "INSERT INTO email_verification_otp (email, otp_code, otp_expiry, attempts) " +
+                           "VALUES (?, ?, ?, 0) ON DUPLICATE KEY UPDATE otp_code=?, otp_expiry=?, attempts=0";
+            try (PreparedStatement stmt = conn.prepareStatement(query)) {
+                stmt.setString(1, email);
+                stmt.setString(2, otp);
+                stmt.setTimestamp(3, expiry);
+                stmt.setString(4, otp);
+                stmt.setTimestamp(5, expiry);
+                stmt.executeUpdate();
+            }
+        }
 
-        exchange.sendResponseHeaders(status, response.length);
+        // 3. Send Email
+        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+        emailService.sendEmail(email, "Your Verification Code", "Your OTP is: " + otp);
 
-        OutputStream os = exchange.getResponseBody();
-        os.write(response);
-        os.close();
+        sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP sent to email\"}");
+    }
+
+    private void handleVerifyOtp(HttpExchange exchange, String email, String userOtp) throws Exception {
+        try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+            String query = "SELECT otp_code, otp_expiry FROM email_verification_otp WHERE email = ?";
+            try (PreparedStatement stmt = conn.prepareStatement(query)) {
+                stmt.setString(1, email);
+                ResultSet rs = stmt.executeQuery();
+
+                if (rs.next()) {
+                    String storedOtp = rs.getString("otp_code");
+                    Timestamp expiry = rs.getTimestamp("otp_expiry");
+
+                    if (expiry.before(new Timestamp(System.currentTimeMillis()))) {
+                        sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"OTP expired\"}");
+                    } else if (storedOtp.equals(userOtp)) {
+                        sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP verified\"}");
+                    } else {
+                        sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Invalid OTP\"}");
+                    }
+                } else {
+                    sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"No OTP found\"}");
+                }
+            }
+        }
+    }
+
+    private void sendResponse(HttpExchange exchange, int status, String response) throws IOException {
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        byte[] bytes = response.getBytes();
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
     }
 }
