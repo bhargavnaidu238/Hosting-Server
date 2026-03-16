@@ -22,9 +22,6 @@ public class WebLoginRegisterHandler implements HttpHandler {
     //Updated the Status to user_status
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-
-        exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
