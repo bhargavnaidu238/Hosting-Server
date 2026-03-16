@@ -44,11 +44,15 @@ public class EmailHandler implements HttpHandler {
             String email = body.getOrDefault("email", "").trim().toLowerCase();
 
             if ("send_otp".equals(type)) {
-                // For Registration: Just send the OTP
+                // FOR REGISTRATION: Check if user already exists
+                if (checkUserExists(email)) {
+                    sendResponse(exchange, 409, "{\"status\":\"error\",\"message\":\"This email is already registered. Please login instead.\"}");
+                    return;
+                }
                 handleSendOtp(exchange, email, "Verification Code", "Your verification OTP is: ");
             } 
             else if ("forgot_password_otp".equals(type)) {
-                // For Forgot Password: First check if email exists in partner_data
+                // FOR FORGOT PASSWORD: Check if email exists in system
                 if (!checkUserExists(email)) {
                     sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"This email is not registered with us.\"}");
                     return;
@@ -85,7 +89,7 @@ public class EmailHandler implements HttpHandler {
         String otp = String.valueOf(new Random().nextInt(900000) + 100000);
         Timestamp expiry = new Timestamp(System.currentTimeMillis() + (5 * 60 * 1000)); // 5 mins
 
-        // PostgreSQL Upsert
+        // PostgreSQL Upsert for OTP management
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
             String query = "INSERT INTO email_verification_otp (email, otp_code, otp_expiry, attempts) " +
                            "VALUES (?, ?, ?, 0) " +
@@ -102,7 +106,7 @@ public class EmailHandler implements HttpHandler {
             }
         }
 
-        // Send actual Email
+        // Trigger the Email
         EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
         String body = prefix + otp + "\n\nThis code expires in 5 minutes.\n\nRegards,\nHotel Booking Team";
         emailService.sendEmail(email, subject, body);
