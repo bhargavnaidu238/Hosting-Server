@@ -296,7 +296,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
                 String insertQuery = "INSERT INTO partner_data (partner_id, partner_name, business_name, email, password, " +
                         "contact_number, address, city, state, country, pincode, gst_number, registration_date, user_status) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::status_enum)";
 
                 try (PreparedStatement insertStmt = conn.prepareStatement(insertQuery)) {
                     insertStmt.setString(1, uniqueID);
