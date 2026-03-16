@@ -33,6 +33,10 @@ public class DbConfigLoader {
         String supabaseProjectURL      = props.getProperty("supabaseurl");
         String supabaseAnonKey   = props.getProperty("anonKey");
         
+        // ====== Send Email Notifcation Storage AI Keys ===============
+        String emailApiKey      = props.getProperty("emailapiKey");
+        String senderEmailAddress   = props.getProperty("senderemailaddress");
+        
         // ===== Payment API properties =====
         String apiKey      = props.getProperty("db.apikey");
         String apiKeySecret   = props.getProperty("db.apikeysecret");
@@ -65,6 +69,15 @@ public class DbConfigLoader {
         }
         if (supabaseAnonKey == null || supabaseAnonKey.isBlank()) {
             throw new IllegalStateException("Missing property: anonKey");
+        }
+        
+     // ===== Validate Email Notification API Key properties =====
+        
+        if (emailApiKey == null || emailApiKey.isBlank()) {
+            throw new IllegalStateException("Missing property: emailApiKey");
+        }
+        if (senderEmailAddress == null || senderEmailAddress.isBlank()) {
+            throw new IllegalStateException("Missing property: senderEmailAddress");
         }
         
         // ===== Validate Payment API Key properties =====

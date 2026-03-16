@@ -83,6 +83,12 @@
             <artifactId>razorpay-java</artifactId>
             <version>1.4.4</version>
         </dependency>
+        
+        <dependency>
+  			<groupId>com.sendgrid</groupId>
+  			<artifactId>sendgrid-java</artifactId>
+  			<version>4.9.3</version>
+		</dependency>
 
     </dependencies>
 
@@ -95,6 +101,37 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.11.0</version>
             </plugin>
+            
+            <plugin>
+	            <groupId>org.springframework.boot</groupId>
+	            <artifactId>spring-boot-maven-plugin</artifactId>
+        	</plugin>
+
+        	<plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-shade-plugin</artifactId>
+            <version>3.5.0</version>
+            <executions>
+                <execution>
+                    <phase>package</phase>
+                    <goals>
+                        <goal>shade</goal>
+                    </goals>
+                    <configuration>
+                        <filters>
+                            <filter>
+                                <artifact>*:*</artifact>
+                                <excludes>
+                                    <exclude>META-INF/*.SF</exclude>
+                                    <exclude>META-INF/*.DSA</exclude>
+                                    <exclude>META-INF/*.RSA</exclude>
+                                </excludes>
+                            </filter>
+                        </filters>
+                    </configuration>
+                </execution>
+            </executions>
+        </plugin>
 
             <!-- FAT JAR -->
             <plugin>

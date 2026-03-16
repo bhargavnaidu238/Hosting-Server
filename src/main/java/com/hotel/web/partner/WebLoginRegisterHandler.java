@@ -1,10 +1,10 @@
 package com.hotel.web.partner;
 
+import com.hotel.notification.service.EmailService;
 import com.hotel.security.PasswordUtil;
 import com.hotel.utilities.DbConfig;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
-
 import java.io.*;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -19,13 +19,11 @@ public class WebLoginRegisterHandler implements HttpHandler {
         this.dbConfig = dbConfig;
     }
 
-    //Updated the Status to user_status
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
-        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(204, -1);
@@ -33,14 +31,14 @@ public class WebLoginRegisterHandler implements HttpHandler {
         }
 
         if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
-            exchange.sendResponseHeaders(405, -1);
+            sendResponse(exchange, 405, "{\"status\":\"error\",\"message\":\"Method Not Allowed\"}");
             return;
         }
 
+        // READ REQUEST BODY
         String body;
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
-
             StringBuilder sb = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) sb.append(line);
@@ -49,34 +47,30 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
         Map<String, String> params = parseForm(body);
 
-        // 🔥 FIX #1 — Normalize path (handles /weblogin%0A, /weblogin/)
-        String path = exchange.getRequestURI()
-                .getPath()
-                .trim()
-                .replaceAll("/+$", "");
+        // NORMALIZE PATH
+        String path = exchange.getRequestURI().getPath().trim().replaceAll("/+$", "");
 
         try {
-            if (path.equals("/forgotpassword")) {
+            if (path.endsWith("/forgotpassword")) {
                 handleForgotPassword(exchange, params);
-
-            } else if (path.equals("/webgetprofile") && params.containsKey("email")) {
-                handleGetProfile(exchange, params.get("email").trim().toLowerCase());
-
-            // 🔥 FIX #2 — Explicit login routing
-            } else if (path.equals("/weblogin")
-                    && params.containsKey("email")
-                    && params.containsKey("password")) {
-
+            } 
+            else if (path.endsWith("/webgetprofile")) {
+                handleGetProfile(exchange, params.getOrDefault("email", "").trim().toLowerCase());
+            } 
+            else if (path.endsWith("/weblogin")) {
                 handleLogin(exchange, params);
-
-            } else {
+            } 
+            else if (path.endsWith("/registerlogin")) {
+                // This is where the registration happens
                 handleRegister(exchange, params);
+            } 
+            else {
+                sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Endpoint not found\"}");
             }
 
         } catch (Exception e) {
             e.printStackTrace();
-            sendResponse(exchange, 500,
-                    "{\"status\":\"error\",\"message\":\"Internal server error\"}");
+            sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"Internal server error: " + e.getMessage() + "\"}");
         }
     }
 
@@ -185,7 +179,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                 "{\"status\":\"error\",\"message\":\"Partner not found\"}");
     }
 
-    // ================== REGISTER ==================
+ // ================== REGISTER ==================
     private void handleRegister(HttpExchange exchange, Map<String, String> params)
             throws IOException, SQLException {
 
@@ -200,9 +194,9 @@ public class WebLoginRegisterHandler implements HttpHandler {
         String rawPassword = params.getOrDefault("password", "").trim();
         String pincode = params.getOrDefault("pincode", "").trim();
         String gstNumber = params.getOrDefault("gst_number", "").trim();
+        String otp = params.getOrDefault("otp", "").trim();
 
         List<String> missingFields = new ArrayList<>();
-
         if (partnerName.isEmpty()) missingFields.add("partner_name");
         if (businessName.isEmpty()) missingFields.add("business_name");
         if (email.isEmpty()) missingFields.add("email");
@@ -214,96 +208,225 @@ public class WebLoginRegisterHandler implements HttpHandler {
         if (country.isEmpty()) missingFields.add("country");
         if (pincode.isEmpty()) missingFields.add("pincode");
         if (gstNumber.isEmpty()) missingFields.add("gst_number");
+        if (otp.isEmpty()) missingFields.add("otp");
 
         if (!missingFields.isEmpty()) {
-            sendResponse(exchange, 400,
-                    "{\"status\":\"error\",\"missing_fields\":" + missingFields + "}");
+            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Missing fields\",\"fields\":" + missingFields + "}");
             return;
         }
 
         String hashedPassword = PasswordUtil.hashPassword(rawPassword);
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+            conn.setAutoCommit(false);
 
-            String checkQuery = "SELECT partner_id FROM partner_data WHERE LOWER(email)=?";
-            try (PreparedStatement checkStmt = conn.prepareStatement(checkQuery)) {
-                checkStmt.setString(1, email);
-                try (ResultSet rs = checkStmt.executeQuery()) {
-                    if (rs.next()) {
-                        sendResponse(exchange, 409,
-                                "{\"status\":\"error\",\"message\":\"Email already registered\"}");
-                        return;
+            try {
+                /* ===============================
+                 * 1. VERIFY OTP
+                 * =============================== */
+                String otpQuery = "SELECT otp_code, attempts, otp_expiry FROM email_verification_otp WHERE email = ?";
+                try (PreparedStatement otpStmt = conn.prepareStatement(otpQuery)) {
+                    otpStmt.setString(1, email);
+                    try (ResultSet rs = otpStmt.executeQuery()) {
+                        if (!rs.next()) {
+                            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"OTP not requested\"}");
+                            return;
+                        }
+
+                        String storedOtp = rs.getString("otp_code");
+                        int attempts = rs.getInt("attempts");
+                        Timestamp expiry = rs.getTimestamp("otp_expiry");
+
+                        if (attempts >= 3) {
+                            sendResponse(exchange, 403, "{\"status\":\"error\",\"message\":\"Maximum attempts reached. Request a new OTP.\"}");
+                            return;
+                        }
+
+                        if (expiry.before(new Timestamp(System.currentTimeMillis()))) {
+                            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"OTP expired\"}");
+                            return;
+                        }
+
+                        if (!storedOtp.equals(otp)) {
+                            String updateAttempts = "UPDATE email_verification_otp SET attempts = attempts + 1 WHERE email=?";
+                            try (PreparedStatement attStmt = conn.prepareStatement(updateAttempts)) {
+                                attStmt.setString(1, email);
+                                attStmt.executeUpdate();
+                            }
+                            conn.commit(); // Save the attempt count even if OTP fails
+                            sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Invalid OTP\"}");
+                            return;
+                        }
                     }
                 }
-            }
 
-            String uniqueID = "PR" + (new Random().nextInt(90000) + 10000);
-            Timestamp registrationDate = new Timestamp(System.currentTimeMillis());
+                /* ===============================
+                 * 2. CHECK IF EMAIL EXISTS
+                 * =============================== */
+                String checkQuery = "SELECT partner_id FROM partner_data WHERE LOWER(email)=?";
+                try (PreparedStatement checkStmt = conn.prepareStatement(checkQuery)) {
+                    checkStmt.setString(1, email);
+                    try (ResultSet rs = checkStmt.executeQuery()) {
+                        if (rs.next()) {
+                            sendResponse(exchange, 409, "{\"status\":\"error\",\"message\":\"Email already registered\"}");
+                            return;
+                        }
+                    }
+                }
 
-            String insertQuery =
-                    "INSERT INTO partner_data " +
-                            "(partner_id, partner_name, business_name, email, password, contact_number, " +
-                            "address, city, state, country, pincode, gst_number, registration_date, user_status) " +
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                /* ===============================
+                 * 3. INSERT USER
+                 * =============================== */
+                String uniqueID = "PR" + (new Random().nextInt(90000) + 10000);
+                Timestamp registrationDate = new Timestamp(System.currentTimeMillis());
 
-            try (PreparedStatement insertStmt = conn.prepareStatement(insertQuery)) {
-                insertStmt.setString(1, uniqueID);
-                insertStmt.setString(2, partnerName);
-                insertStmt.setString(3, businessName);
-                insertStmt.setString(4, email);
-                insertStmt.setString(5, hashedPassword);
-                insertStmt.setString(6, contactNumber);
-                insertStmt.setString(7, address);
-                insertStmt.setString(8, city);
-                insertStmt.setString(9, state);
-                insertStmt.setString(10, country);
-                insertStmt.setString(11, pincode);
-                insertStmt.setString(12, gstNumber);
-                insertStmt.setTimestamp(13, registrationDate);
-                insertStmt.setString(14, "Active");
-                insertStmt.executeUpdate();
+                String insertQuery = "INSERT INTO partner_data (partner_id, partner_name, business_name, email, password, " +
+                        "contact_number, address, city, state, country, pincode, gst_number, registration_date, user_status) " +
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::status_enum)";
+
+                try (PreparedStatement insertStmt = conn.prepareStatement(insertQuery)) {
+                    insertStmt.setString(1, uniqueID);
+                    insertStmt.setString(2, partnerName);
+                    insertStmt.setString(3, businessName);
+                    insertStmt.setString(4, email);
+                    insertStmt.setString(5, hashedPassword);
+                    insertStmt.setString(6, contactNumber);
+                    insertStmt.setString(7, address);
+                    insertStmt.setString(8, city);
+                    insertStmt.setString(9, state);
+                    insertStmt.setString(10, country);
+                    insertStmt.setString(11, pincode);
+                    insertStmt.setString(12, gstNumber);
+                    insertStmt.setTimestamp(13, registrationDate);
+                    insertStmt.setString(14, "Active");
+                    insertStmt.executeUpdate();
+                }
+
+                /* ===============================
+                 * 4. CLEANUP OTP
+                 * =============================== */
+                String deleteOtp = "DELETE FROM email_verification_otp WHERE email=?";
+                try (PreparedStatement deleteStmt = conn.prepareStatement(deleteOtp)) {
+                    deleteStmt.setString(1, email);
+                    deleteStmt.executeUpdate();
+                }
+
+                conn.commit();
+
+                /* ===============================
+                 * 5. ASYNC EMAIL TRIGGER
+                 * =============================== */
+                new Thread(() -> {
+                    try {
+                        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                        String subject = "Welcome to Hotel Booking Partner Portal";
+                        String body = "Hello " + partnerName + ",\n\nYour registration is successful. ID: " + uniqueID;
+                        emailService.sendEmail(email, subject, body);
+                    } catch (Exception e) {
+                        System.err.println("Async Email Failed: " + e.getMessage());
+                    }
+                }).start();
+
+                sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"Registration successful\"}");
+
+            } catch (Exception e) {
+                conn.rollback();
+                throw e;
             }
         }
-
-        sendResponse(exchange, 200,
-                "{\"status\":\"success\",\"message\":\"Registration successful\"}");
     }
 
+    // Helper method to ensure capitalization doesn't crash on null
+    private String capitalize(String str) {
+        if (str == null || str.trim().isEmpty()) return "";
+        return str.substring(0, 1).toUpperCase() + str.substring(1).toLowerCase();
+    }
+    
     // ================== FORGOT PASSWORD ==================
     private void handleForgotPassword(HttpExchange exchange, Map<String, String> params)
             throws IOException, SQLException {
 
-        String email = params.get("email").trim().toLowerCase();
-        String rawNewPassword = params.get("newPassword").trim();
+        String email = params.getOrDefault("email", "").trim().toLowerCase();
+        String rawNewPassword = params.getOrDefault("newPassword", "").trim();
+
+        // Basic Validation
+        if (email.isEmpty() || rawNewPassword.isEmpty()) {
+            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Missing email or password\"}");
+            return;
+        }
 
         String hashedPassword = PasswordUtil.hashPassword(rawNewPassword);
 
-        String updateQuery = "UPDATE partner_data SET Password=? WHERE LOWER(email)=?";
+        try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+            conn.setAutoCommit(false);
 
-        try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
-             PreparedStatement stmt = conn.prepareStatement(updateQuery)) {
+            try {
+                /* * 1. VERIFY OTP SESSION
+                 * We check the email_verification_otp table to ensure the user 
+                 * has successfully verified their identity via OTP first.
+                 */
+                String checkOtpQuery = "SELECT email FROM email_verification_otp WHERE email = ?";
+                try (PreparedStatement checkStmt = conn.prepareStatement(checkOtpQuery)) {
+                    checkStmt.setString(1, email);
+                    try (ResultSet rs = checkStmt.executeQuery()) {
+                        if (!rs.next()) {
+                            sendResponse(exchange, 403, "{\"status\":\"error\",\"message\":\"Session expired or identity not verified\"}");
+                            return;
+                        }
+                    }
+                }
 
-            stmt.setString(1, hashedPassword);
-            stmt.setString(2, email);
+                /* * 2. UPDATE PASSWORD
+                 * Apply the new hashed password to the partner_data table.
+                 */
+                String updateQuery = "UPDATE partner_data SET password=? WHERE LOWER(email)=?";
+                try (PreparedStatement stmt = conn.prepareStatement(updateQuery)) {
+                    stmt.setString(1, hashedPassword);
+                    stmt.setString(2, email);
 
-            int updated = stmt.executeUpdate();
-            if (updated == 0) {
-                sendResponse(exchange, 404,
-                        "{\"status\":\"error\",\"message\":\"Email not found\"}");
-                return;
+                    if (stmt.executeUpdate() == 0) {
+                        sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Account not found\"}");
+                        conn.rollback();
+                        return;
+                    }
+                }
+
+                /* * 3. CLEANUP
+                 * Remove the OTP record now that the reset is successful.
+                 */
+                try (PreparedStatement delStmt = conn.prepareStatement("DELETE FROM email_verification_otp WHERE email=?")) {
+                    delStmt.setString(1, email);
+                    delStmt.executeUpdate();
+                }
+
+                // Commit the transaction
+                conn.commit(); 
+
+                /* * 4. SECURITY NOTIFICATION (ASYNC)
+                 * Alert the user that their password was changed for security.
+                 */
+                new Thread(() -> {
+                    try {
+                        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                        String subject = "Security Alert: Password Changed";
+                        String body = "Hello,\n\nThis is a confirmation that your password for the Partner Portal was successfully changed.\n\n"
+                                    + "If you did not perform this action, please contact support immediately.\n\n"
+                                    + "Regards,\nHotel Booking Team";
+                        emailService.sendEmail(email, subject, body);
+                    } catch (Exception e) {
+                        System.err.println("Post-Reset Notification Failed: " + e.getMessage());
+                    }
+                }).start();
+
+                sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"Password updated successfully\"}");
+
+            } catch (Exception e) {
+                conn.rollback();
+                throw e;
             }
         }
-
-        sendResponse(exchange, 200,
-                "{\"status\":\"success\",\"message\":\"Password updated successfully\"}");
     }
-
-    // ================== UTIL ==================
-    private String capitalize(String str) {
-        if (str == null || str.isEmpty()) return str;
-        return str.substring(0, 1).toUpperCase() + str.substring(1);
-    }
-
+    
     private Map<String, String> parseForm(String body) throws UnsupportedEncodingException {
         Map<String, String> map = new HashMap<>();
         if (body == null || body.isEmpty()) return map;

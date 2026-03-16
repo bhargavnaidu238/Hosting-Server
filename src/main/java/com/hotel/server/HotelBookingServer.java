@@ -10,7 +10,6 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.util.concurrent.Executors;
-
 import com.hotel.app.AppFilterHandler;
 import com.hotel.app.BookingHandler;
 import com.hotel.app.BookingHistoryHandler;
@@ -22,6 +21,7 @@ import com.hotel.app.PgsHandler;
 import com.hotel.app.ProfileHandler;
 import com.hotel.app.RegisterHandler;
 import com.hotel.app.RewardsWalletHandler;
+import com.hotel.notification.service.EmailHandler;
 import com.hotel.utilities.DbConfig;
 import com.hotel.utilities.HotelImagesHandler;
 import com.hotel.web.finance.GetPartnerFinanceHandler;
@@ -112,6 +112,11 @@ public class HotelBookingServer {
         server.createContext("/updateBankDetails", new UpdateBankDetailsHandler(dbConfig));
         server.createContext("/requestPayout", new RequestPayoutHandler(dbConfig));
         server.createContext("/getPartnerTransactions", new GetPartnerTransactionsHandler(dbConfig));
+        
+     // ========== Notification Service ==========
+        server.createContext("/send-email", new EmailHandler(dbConfig));
+        server.createContext("/send-email-otp", new EmailHandler(dbConfig));
+        server.createContext("/verify-email-otp", new EmailHandler(dbConfig));
 
 
 
