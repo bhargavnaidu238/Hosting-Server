@@ -53,8 +53,13 @@ public class EmailHandler implements HttpHandler {
 
         // 2. Save to Database
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-            String query = "INSERT INTO email_verification_otp (email, otp_code, otp_expiry, attempts) " +
-                           "VALUES (?, ?, ?, 0) ON DUPLICATE KEY UPDATE otp_code=?, otp_expiry=?, attempts=0";
+        	// Correct PostgreSQL syntax for "Upsert"
+        	String query = "INSERT INTO email_verification_otp (email, otp_code, otp_expiry, attempts) " +
+        	               "VALUES (?, ?, ?, 0) " +
+        	               "ON CONFLICT (email) DO UPDATE SET " +
+        	               "otp_code = EXCLUDED.otp_code, " +
+        	               "otp_expiry = EXCLUDED.otp_expiry, " +
+        	               "attempts = 0";
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
                 stmt.setString(1, email);
                 stmt.setString(2, otp);
