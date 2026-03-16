@@ -350,29 +350,82 @@ public class WebLoginRegisterHandler implements HttpHandler {
     private void handleForgotPassword(HttpExchange exchange, Map<String, String> params)
             throws IOException, SQLException {
 
-        String email = params.get("email").trim().toLowerCase();
-        String rawNewPassword = params.get("newPassword").trim();
+        String email = params.getOrDefault("email", "").trim().toLowerCase();
+        String rawNewPassword = params.getOrDefault("newPassword", "").trim();
+
+        if (email.isEmpty() || rawNewPassword.isEmpty()) {
+            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Missing email or password\"}");
+            return;
+        }
 
         String hashedPassword = PasswordUtil.hashPassword(rawNewPassword);
 
-        String updateQuery = "UPDATE partner_data SET Password=? WHERE LOWER(email)=?";
+        try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+            conn.setAutoCommit(false); // Start Transaction
 
-        try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
-             PreparedStatement stmt = conn.prepareStatement(updateQuery)) {
+            try {
+                /* * 1. VERIFY THAT AN OTP WAS RECENTLY GENERATED
+                 * Note: In a production app, you might want a 'is_verified' flag,
+                 * but here we check if the record exists before we delete it.
+                 */
+                String checkOtpQuery = "SELECT email FROM email_verification_otp WHERE email = ?";
+                try (PreparedStatement checkStmt = conn.prepareStatement(checkOtpQuery)) {
+                    checkStmt.setString(1, email);
+                    try (ResultSet rs = checkStmt.executeQuery()) {
+                        if (!rs.next()) {
+                            sendResponse(exchange, 403, "{\"status\":\"error\",\"message\":\"Session expired or OTP not verified\"}");
+                            return;
+                        }
+                    }
+                }
 
-            stmt.setString(1, hashedPassword);
-            stmt.setString(2, email);
+                /* * 2. UPDATE THE PASSWORD
+                 */
+                String updateQuery = "UPDATE partner_data SET password=? WHERE LOWER(email)=?";
+                try (PreparedStatement stmt = conn.prepareStatement(updateQuery)) {
+                    stmt.setString(1, hashedPassword);
+                    stmt.setString(2, email);
 
-            int updated = stmt.executeUpdate();
-            if (updated == 0) {
-                sendResponse(exchange, 404,
-                        "{\"status\":\"error\",\"message\":\"Email not found\"}");
-                return;
+                    int updated = stmt.executeUpdate();
+                    if (updated == 0) {
+                        sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Account not found\"}");
+                        conn.rollback();
+                        return;
+                    }
+                }
+
+                /* * 3. DELETE OTP RECORD (CLEANUP)
+                 */
+                String deleteOtp = "DELETE FROM email_verification_otp WHERE email=?";
+                try (PreparedStatement delStmt = conn.prepareStatement(deleteOtp)) {
+                    delStmt.setString(1, email);
+                    delStmt.executeUpdate();
+                }
+
+                conn.commit(); // Finalize transaction
+
+                /* * 4. SEND CONFIRMATION EMAIL (ASYNC)
+                 */
+                new Thread(() -> {
+                    try {
+                        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                        String subject = "Security Alert: Password Changed";
+                        String body = "Hello,\n\nThis is a confirmation that your password for the Partner Portal was successfully changed.\n\n"
+                                    + "If you did not perform this action, please contact support immediately.\n\n"
+                                    + "Regards,\nHotel Booking Team";
+                        emailService.sendEmail(email, subject, body);
+                    } catch (Exception e) {
+                        System.err.println("Confirmation Email Failed: " + e.getMessage());
+                    }
+                }).start();
+
+                sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"Password updated successfully\"}");
+
+            } catch (Exception e) {
+                conn.rollback();
+                throw e;
             }
         }
-
-        sendResponse(exchange, 200,
-                "{\"status\":\"success\",\"message\":\"Password updated successfully\"}");
     }
 
     private Map<String, String> parseForm(String body) throws UnsupportedEncodingException {
