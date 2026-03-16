@@ -22,30 +22,27 @@ public class WebLoginRegisterHandler implements HttpHandler {
     //Updated the Status to user_status
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        // 1. SET CORS HEADERS (Must be at the very top)
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-        // 2. HANDLE PRE-FLIGHT
-        if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
-            exchange.sendResponseHeaders(204, -1);
-            return;
-        }
-
+        // 2. HANDLE PRE-FLIGHT (OPTIONS)
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(204, -1);
             return;
         }
 
+        // 3. ONLY ALLOW POST FOR THESE ACTIONS
         if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
-            exchange.sendResponseHeaders(405, -1);
+            sendResponse(exchange, 405, "{\"status\":\"error\",\"message\":\"Method Not Allowed\"}");
             return;
         }
 
+        // 4. READ REQUEST BODY
         String body;
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
-
             StringBuilder sb = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) sb.append(line);
@@ -54,34 +51,30 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
         Map<String, String> params = parseForm(body);
 
-        // 🔥 FIX #1 — Normalize path (handles /weblogin%0A, /weblogin/)
-        String path = exchange.getRequestURI()
-                .getPath()
-                .trim()
-                .replaceAll("/+$", "");
+        // 5. NORMALIZE PATH
+        String path = exchange.getRequestURI().getPath().trim().replaceAll("/+$", "");
 
         try {
-            if (path.equals("/forgotpassword")) {
+            if (path.endsWith("/forgotpassword")) {
                 handleForgotPassword(exchange, params);
-
-            } else if (path.equals("/webgetprofile") && params.containsKey("email")) {
-                handleGetProfile(exchange, params.get("email").trim().toLowerCase());
-
-            // 🔥 FIX #2 — Explicit login routing
-            } else if (path.equals("/weblogin")
-                    && params.containsKey("email")
-                    && params.containsKey("password")) {
-
+            } 
+            else if (path.endsWith("/webgetprofile")) {
+                handleGetProfile(exchange, params.getOrDefault("email", "").trim().toLowerCase());
+            } 
+            else if (path.endsWith("/weblogin")) {
                 handleLogin(exchange, params);
-
-            } else {
+            } 
+            else if (path.endsWith("/registerlogin")) {
+                // This is where the registration happens
                 handleRegister(exchange, params);
+            } 
+            else {
+                sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Endpoint not found\"}");
             }
 
         } catch (Exception e) {
             e.printStackTrace();
-            sendResponse(exchange, 500,
-                    "{\"status\":\"error\",\"message\":\"Internal server error\"}");
+            sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"Internal server error: " + e.getMessage() + "\"}");
         }
     }
 
