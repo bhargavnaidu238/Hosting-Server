@@ -71,9 +71,7 @@ public class EmailHandler implements HttpHandler {
         }
     }
 
-    /**
-     * Helper to verify if an email exists in the partner_data table
-     */
+     //Helper to verify if an email exists in the partner_data table
     private boolean checkUserExists(String email) throws SQLException {
         String query = "SELECT 1 FROM partner_data WHERE LOWER(email) = ?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();

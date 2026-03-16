@@ -19,9 +19,8 @@ public class EmailService {
         if (apiKey == null || apiKey.isEmpty() || senderEmail == null || senderEmail.isEmpty()) {
             throw new RuntimeException("Email configuration (API Key or Sender) is missing!");
         }
-        this.apiKey = apiKey; // Keeping reference if needed
+        this.apiKey = apiKey;
         this.senderEmail = senderEmail;
-        // Initialize SendGrid client once
         this.sendGrid = new SendGrid(apiKey);
     }
 
@@ -56,7 +55,7 @@ public class EmailService {
             }
         } catch (IOException ex) {
             System.err.println("[EmailService] Error sending email: " + ex.getMessage());
-            throw ex; // Rethrow to let the caller handle the failure logic
+            throw ex;
         }
     }
 }

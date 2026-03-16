@@ -10,7 +10,6 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.util.concurrent.Executors;
-
 import com.hotel.app.AppFilterHandler;
 import com.hotel.app.BookingHandler;
 import com.hotel.app.BookingHistoryHandler;

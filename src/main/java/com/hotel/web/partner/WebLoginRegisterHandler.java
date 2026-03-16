@@ -19,27 +19,23 @@ public class WebLoginRegisterHandler implements HttpHandler {
         this.dbConfig = dbConfig;
     }
 
-    //Updated the Status to user_status
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // 1. SET CORS HEADERS (Must be at the very top)
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-        // 2. HANDLE PRE-FLIGHT (OPTIONS)
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(204, -1);
             return;
         }
 
-        // 3. ONLY ALLOW POST FOR THESE ACTIONS
         if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
             sendResponse(exchange, 405, "{\"status\":\"error\",\"message\":\"Method Not Allowed\"}");
             return;
         }
 
-        // 4. READ REQUEST BODY
+        // READ REQUEST BODY
         String body;
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
@@ -51,7 +47,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
         Map<String, String> params = parseForm(body);
 
-        // 5. NORMALIZE PATH
+        // NORMALIZE PATH
         String path = exchange.getRequestURI().getPath().trim().replaceAll("/+$", "");
 
         try {
@@ -222,7 +218,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
         String hashedPassword = PasswordUtil.hashPassword(rawPassword);
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-            conn.setAutoCommit(false); // Start Transaction
+            conn.setAutoCommit(false);
 
             try {
                 /* ===============================
@@ -315,7 +311,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     deleteStmt.executeUpdate();
                 }
 
-                conn.commit(); // Finalize all database changes
+                conn.commit();
 
                 /* ===============================
                  * 5. ASYNC EMAIL TRIGGER
@@ -334,7 +330,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                 sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"Registration successful\"}");
 
             } catch (Exception e) {
-                conn.rollback(); // Undo everything if any step fails
+                conn.rollback();
                 throw e;
             }
         }
@@ -362,7 +358,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
         String hashedPassword = PasswordUtil.hashPassword(rawNewPassword);
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-            conn.setAutoCommit(false); // Start Transaction for atomic update
+            conn.setAutoCommit(false);
 
             try {
                 /* * 1. VERIFY OTP SESSION
