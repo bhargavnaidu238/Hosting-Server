@@ -353,6 +353,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
         String email = params.getOrDefault("email", "").trim().toLowerCase();
         String rawNewPassword = params.getOrDefault("newPassword", "").trim();
 
+        // Basic Validation
         if (email.isEmpty() || rawNewPassword.isEmpty()) {
             sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Missing email or password\"}");
             return;
@@ -361,50 +362,52 @@ public class WebLoginRegisterHandler implements HttpHandler {
         String hashedPassword = PasswordUtil.hashPassword(rawNewPassword);
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-            conn.setAutoCommit(false); // Start Transaction
+            conn.setAutoCommit(false); // Start Transaction for atomic update
 
             try {
-                /* * 1. VERIFY THAT AN OTP WAS RECENTLY GENERATED
-                 * Note: In a production app, you might want a 'is_verified' flag,
-                 * but here we check if the record exists before we delete it.
+                /* * 1. VERIFY OTP SESSION
+                 * We check the email_verification_otp table to ensure the user 
+                 * has successfully verified their identity via OTP first.
                  */
                 String checkOtpQuery = "SELECT email FROM email_verification_otp WHERE email = ?";
                 try (PreparedStatement checkStmt = conn.prepareStatement(checkOtpQuery)) {
                     checkStmt.setString(1, email);
                     try (ResultSet rs = checkStmt.executeQuery()) {
                         if (!rs.next()) {
-                            sendResponse(exchange, 403, "{\"status\":\"error\",\"message\":\"Session expired or OTP not verified\"}");
+                            sendResponse(exchange, 403, "{\"status\":\"error\",\"message\":\"Session expired or identity not verified\"}");
                             return;
                         }
                     }
                 }
 
-                /* * 2. UPDATE THE PASSWORD
+                /* * 2. UPDATE PASSWORD
+                 * Apply the new hashed password to the partner_data table.
                  */
                 String updateQuery = "UPDATE partner_data SET password=? WHERE LOWER(email)=?";
                 try (PreparedStatement stmt = conn.prepareStatement(updateQuery)) {
                     stmt.setString(1, hashedPassword);
                     stmt.setString(2, email);
 
-                    int updated = stmt.executeUpdate();
-                    if (updated == 0) {
+                    if (stmt.executeUpdate() == 0) {
                         sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Account not found\"}");
                         conn.rollback();
                         return;
                     }
                 }
 
-                /* * 3. DELETE OTP RECORD (CLEANUP)
+                /* * 3. CLEANUP
+                 * Remove the OTP record now that the reset is successful.
                  */
-                String deleteOtp = "DELETE FROM email_verification_otp WHERE email=?";
-                try (PreparedStatement delStmt = conn.prepareStatement(deleteOtp)) {
+                try (PreparedStatement delStmt = conn.prepareStatement("DELETE FROM email_verification_otp WHERE email=?")) {
                     delStmt.setString(1, email);
                     delStmt.executeUpdate();
                 }
 
-                conn.commit(); // Finalize transaction
+                // Commit the transaction
+                conn.commit(); 
 
-                /* * 4. SEND CONFIRMATION EMAIL (ASYNC)
+                /* * 4. SECURITY NOTIFICATION (ASYNC)
+                 * Alert the user that their password was changed for security.
                  */
                 new Thread(() -> {
                     try {
@@ -415,7 +418,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                                     + "Regards,\nHotel Booking Team";
                         emailService.sendEmail(email, subject, body);
                     } catch (Exception e) {
-                        System.err.println("Confirmation Email Failed: " + e.getMessage());
+                        System.err.println("Post-Reset Notification Failed: " + e.getMessage());
                     }
                 }).start();
 
@@ -427,7 +430,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
             }
         }
     }
-
+    
     private Map<String, String> parseForm(String body) throws UnsupportedEncodingException {
         Map<String, String> map = new HashMap<>();
         if (body == null || body.isEmpty()) return map;

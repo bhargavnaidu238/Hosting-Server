@@ -23,12 +23,11 @@ public class EmailHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // 1. ADD CORS HEADERS (Required for Flutter Web)
+        // 1. CORS Headers
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
-        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-        // Handle pre-flight OPTIONS request
         if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
             exchange.sendResponseHeaders(204, -1);
             return;
@@ -45,25 +44,48 @@ public class EmailHandler implements HttpHandler {
             String email = body.getOrDefault("email", "").trim().toLowerCase();
 
             if ("send_otp".equals(type)) {
-                handleSendOtp(exchange, email);
-            } else if ("verify_otp".equals(type)) {
+                // For Registration: Just send the OTP
+                handleSendOtp(exchange, email, "Verification Code", "Your verification OTP is: ");
+            } 
+            else if ("forgot_password_otp".equals(type)) {
+                // For Forgot Password: First check if email exists in partner_data
+                if (!checkUserExists(email)) {
+                    sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"This email is not registered with us.\"}");
+                    return;
+                }
+                handleSendOtp(exchange, email, "Reset Your Password", "You requested to reset your password. Your OTP is: ");
+            } 
+            else if ("verify_otp".equals(type)) {
                 handleVerifyOtp(exchange, email, body.getOrDefault("otp", ""));
-            } else {
+            } 
+            else {
                 sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Invalid type\"}");
             }
         } catch (Exception e) {
             e.printStackTrace();
-            // Sending the actual error message helps debugging in Postman
             sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"" + e.getMessage().replace("\"", "'") + "\"}");
         }
     }
 
-    private void handleSendOtp(HttpExchange exchange, String email) throws Exception {
-        // 1. Generate 6-digit OTP
+    /**
+     * Helper to verify if an email exists in the partner_data table
+     */
+    private boolean checkUserExists(String email) throws SQLException {
+        String query = "SELECT 1 FROM partner_data WHERE LOWER(email) = ?";
+        try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+            pstmt.setString(1, email);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private void handleSendOtp(HttpExchange exchange, String email, String subject, String prefix) throws Exception {
         String otp = String.valueOf(new Random().nextInt(900000) + 100000);
         Timestamp expiry = new Timestamp(System.currentTimeMillis() + (5 * 60 * 1000)); // 5 mins
 
-        // 2. Save to Database (PostgreSQL Upsert)
+        // PostgreSQL Upsert
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
             String query = "INSERT INTO email_verification_otp (email, otp_code, otp_expiry, attempts) " +
                            "VALUES (?, ?, ?, 0) " +
@@ -73,18 +95,17 @@ public class EmailHandler implements HttpHandler {
                            "attempts = 0";
 
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
-                stmt.setString(1, email);      // Matches first ?
-                stmt.setString(2, otp);        // Matches second ?
-                stmt.setTimestamp(3, expiry);   // Matches third ?
-                
-                // CRITICAL: Removed index 4 and 5 because EXCLUDED handles those automatically in Postgres
+                stmt.setString(1, email);
+                stmt.setString(2, otp);
+                stmt.setTimestamp(3, expiry);
                 stmt.executeUpdate();
             }
         }
 
-        // 3. Send Email
+        // Send actual Email
         EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
-        emailService.sendEmail(email, "Your Verification Code", "Your OTP is: " + otp);
+        String body = prefix + otp + "\n\nThis code expires in 5 minutes.\n\nRegards,\nHotel Booking Team";
+        emailService.sendEmail(email, subject, body);
 
         sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP sent to email\"}");
     }
@@ -107,7 +128,7 @@ public class EmailHandler implements HttpHandler {
                             sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Invalid OTP\"}");
                         }
                     } else {
-                        sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"No OTP requested for this email\"}");
+                        sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"No OTP session found\"}");
                     }
                 }
             }
