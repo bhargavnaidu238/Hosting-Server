@@ -23,6 +23,17 @@ public class EmailHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        // 1. ADD CORS HEADERS (Required for Flutter Web)
+        exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+
+        // Handle pre-flight OPTIONS request
+        if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
         if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
             sendResponse(exchange, 405, "{\"status\":\"error\",\"message\":\"Method not allowed\"}");
             return;
@@ -42,7 +53,8 @@ public class EmailHandler implements HttpHandler {
             }
         } catch (Exception e) {
             e.printStackTrace();
-            sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"Internal Server Error\"}");
+            // Sending the actual error message helps debugging in Postman
+            sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"" + e.getMessage().replace("\"", "'") + "\"}");
         }
     }
 
@@ -51,21 +63,21 @@ public class EmailHandler implements HttpHandler {
         String otp = String.valueOf(new Random().nextInt(900000) + 100000);
         Timestamp expiry = new Timestamp(System.currentTimeMillis() + (5 * 60 * 1000)); // 5 mins
 
-        // 2. Save to Database
+        // 2. Save to Database (PostgreSQL Upsert)
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-        	// Correct PostgreSQL syntax for "Upsert"
-        	String query = "INSERT INTO email_verification_otp (email, otp_code, otp_expiry, attempts) " +
-        	               "VALUES (?, ?, ?, 0) " +
-        	               "ON CONFLICT (email) DO UPDATE SET " +
-        	               "otp_code = EXCLUDED.otp_code, " +
-        	               "otp_expiry = EXCLUDED.otp_expiry, " +
-        	               "attempts = 0";
+            String query = "INSERT INTO email_verification_otp (email, otp_code, otp_expiry, attempts) " +
+                           "VALUES (?, ?, ?, 0) " +
+                           "ON CONFLICT (email) DO UPDATE SET " +
+                           "otp_code = EXCLUDED.otp_code, " +
+                           "otp_expiry = EXCLUDED.otp_expiry, " +
+                           "attempts = 0";
+
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
-                stmt.setString(1, email);
-                stmt.setString(2, otp);
-                stmt.setTimestamp(3, expiry);
-                stmt.setString(4, otp);
-                stmt.setTimestamp(5, expiry);
+                stmt.setString(1, email);      // Matches first ?
+                stmt.setString(2, otp);        // Matches second ?
+                stmt.setTimestamp(3, expiry);   // Matches third ?
+                
+                // CRITICAL: Removed index 4 and 5 because EXCLUDED handles those automatically in Postgres
                 stmt.executeUpdate();
             }
         }
@@ -82,21 +94,21 @@ public class EmailHandler implements HttpHandler {
             String query = "SELECT otp_code, otp_expiry FROM email_verification_otp WHERE email = ?";
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
                 stmt.setString(1, email);
-                ResultSet rs = stmt.executeQuery();
+                try (ResultSet rs = stmt.executeQuery()) {
+                    if (rs.next()) {
+                        String storedOtp = rs.getString("otp_code");
+                        Timestamp expiry = rs.getTimestamp("otp_expiry");
 
-                if (rs.next()) {
-                    String storedOtp = rs.getString("otp_code");
-                    Timestamp expiry = rs.getTimestamp("otp_expiry");
-
-                    if (expiry.before(new Timestamp(System.currentTimeMillis()))) {
-                        sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"OTP expired\"}");
-                    } else if (storedOtp.equals(userOtp)) {
-                        sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP verified\"}");
+                        if (expiry.before(new Timestamp(System.currentTimeMillis()))) {
+                            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"OTP expired\"}");
+                        } else if (storedOtp.equals(userOtp)) {
+                            sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP verified\"}");
+                        } else {
+                            sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Invalid OTP\"}");
+                        }
                     } else {
-                        sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Invalid OTP\"}");
+                        sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"No OTP requested for this email\"}");
                     }
-                } else {
-                    sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"No OTP found\"}");
                 }
             }
         }
