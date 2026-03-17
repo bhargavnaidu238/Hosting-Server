@@ -144,7 +144,7 @@ public class RequestPayoutHandler implements HttpHandler {
                     INSERT INTO partner_transactions
                     (partner_id, transaction_id, transaction_date, total_amount, withdrawal_amount, balance_amount,
                      status, transaction_type, comments)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?::payment_status_enum, ?, ?)
                     """;
 
             try (PreparedStatement ins = finConn.prepareStatement(insert)) {
