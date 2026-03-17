@@ -52,7 +52,7 @@ public class UpdateBankDetailsHandler implements HttpHandler {
         String accountNumber = params.getOrDefault("Account_Number", "");
         String ifscSwift = params.getOrDefault("IFSC_SWIFT", "");
         String accountType = params.getOrDefault("Account_Type", "");
-        String panTaxId = params.getOrDefault("PAN_Tax_ID", "");
+        String panTaxId = params.getOrDefault("PAN_Tax_ID", "").toUpperCase();
         String payoutType = params.getOrDefault("Payout_Type", "");
 
         if (!VALID_ACCOUNT_TYPES.contains(accountType)) {

@@ -23,7 +23,7 @@ public class RequestPayoutHandler implements HttpHandler {
     public void handle(HttpExchange exchange) throws IOException {
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
-        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(204, -1);
@@ -56,10 +56,10 @@ public class RequestPayoutHandler implements HttpHandler {
             finConn.setAutoCommit(false);
 
             // 1. Fetch Finance Row with Lock
-            double commPct, netRev, pendPayout, paidPayout;
+            double commPct, netRev;
             String bankAcc, bankName;
             
-            String selectSQL = "SELECT Commission_Percentage, Paid_Payout, Pending_Payout, Bank_Name, Account_Number " +
+            String selectSQL = "SELECT Commission_Percentage, Bank_Name, Account_Number " +
                              "FROM Partner_Finance WHERE Partner_ID=? FOR UPDATE";
 
             try (PreparedStatement ps = finConn.prepareStatement(selectSQL)) {
@@ -115,10 +115,11 @@ public class RequestPayoutHandler implements HttpHandler {
                 ps.executeUpdate();
             }
 
+            // 4. Finalize DB work before starting email thread
             finConn.commit();
 
-            // 4. Fetch Contact Info from partner_data & Send Email
-            triggerPayoutEmail(finConn, partnerId, txId, requestedAmount, balanceAmount, bankAcc, bankName, comments);
+            // 5. Trigger Email (Passing raw data, not the connection)
+            triggerPayoutEmail(partnerId, txId, requestedAmount, balanceAmount, bankAcc, bankName, comments);
 
             sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"Payout requested\",\"transaction_id\":\"" + txId + "\"}");
 
@@ -132,9 +133,10 @@ public class RequestPayoutHandler implements HttpHandler {
         }
     }
 
-    private void triggerPayoutEmail(Connection conn, String pid, String txId, double amt, double bal, String acc, String bank, String comm) {
+    private void triggerPayoutEmail(String pid, String txId, double amt, double bal, String acc, String bank, String comm) {
         new Thread(() -> {
-            try {
+            // Background thread opens its OWN fresh connection
+            try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
                 String sql = "SELECT partner_name, email FROM partner_data WHERE partner_id = ?";
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setString(1, pid);
@@ -143,6 +145,8 @@ public class RequestPayoutHandler implements HttpHandler {
                         String name = rs.getString("partner_name");
                         String email = rs.getString("email");
                         String maskedAcc = (acc != null && acc.length() > 4) ? "XXXX" + acc.substring(acc.length() - 4) : acc;
+
+                        System.out.println("[EmailService] Dispatching payout notification to: " + email);
 
                         EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
                         String subject = "Payout Request Received - " + txId;
@@ -156,10 +160,15 @@ public class RequestPayoutHandler implements HttpHandler {
                                      "Comments: " + comm + "\n\n" +
                                      "The amount will be processed within our standard settlement period.\n\n" +
                                      "Regards,\nFinance Team";
+                        
                         emailService.sendEmail(email, subject, body);
+                        System.out.println("[EmailService] Notification sent successfully for TX: " + txId);
                     }
                 }
-            } catch (Exception e) { System.err.println("Email failed: " + e.getMessage()); }
+            } catch (Exception e) { 
+                System.err.println("[EmailService] Critical Failure: " + e.getMessage());
+                e.printStackTrace(); 
+            }
         }).start();
     }
 
