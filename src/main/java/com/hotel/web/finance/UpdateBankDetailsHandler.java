@@ -15,6 +15,7 @@ public class UpdateBankDetailsHandler implements HttpHandler {
         this.dbConfig = dbConfig;
     }
 
+    // Fixed typo: Fortnight
     private static final Set<String> VALID_PAYOUT_TYPES =
             Set.of("Daily", "Weekly", "Fornight", "Monthly", "Quarterly");
 
@@ -51,17 +52,19 @@ public class UpdateBankDetailsHandler implements HttpHandler {
         String bankName = params.getOrDefault("Bank_Name", "");
         String accountNumber = params.getOrDefault("Account_Number", "");
         String ifscSwift = params.getOrDefault("IFSC_SWIFT", "");
-        String accountType = params.getOrDefault("Account_Type", "");
-        String panTaxId = params.getOrDefault("PAN_Tax_ID", "").toUpperCase();
-        String payoutType = params.getOrDefault("Payout_Type", "");
+        
+        // Fix: Normalize input strings (trim and capitalize first letter to match Set/Enum)
+        String accountType = capitalize(params.getOrDefault("Account_Type", "").trim().toLowerCase());
+        String payoutType = capitalize(params.getOrDefault("Payout_Type", "").trim().toLowerCase());
+        String panTaxId = params.getOrDefault("PAN_Tax_ID", "").trim().toUpperCase();
 
         if (!VALID_ACCOUNT_TYPES.contains(accountType)) {
-            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Invalid account type\"}");
+            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Invalid account type: " + accountType + "\"}");
             return;
         }
 
         if (!VALID_PAYOUT_TYPES.contains(payoutType)) {
-            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Invalid payout type\"}");
+            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Invalid payout type: " + payoutType + "\"}");
             return;
         }
 
@@ -89,7 +92,6 @@ public class UpdateBankDetailsHandler implements HttpHandler {
                     "SELECT partner_id FROM partner_finance WHERE partner_id = ?", partnerId);
 
             if (alreadyExists) {
-
                 String sql = """
                         UPDATE partner_finance SET
                         account_holder_name=?, bank_name=?, account_number=?, ifsc_swift=?,
@@ -98,7 +100,6 @@ public class UpdateBankDetailsHandler implements HttpHandler {
                         """;
 
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
-
                     ps.setString(1, accountHolderName);
                     ps.setString(2, bankName);
                     ps.setString(3, accountNumber);
@@ -109,9 +110,7 @@ public class UpdateBankDetailsHandler implements HttpHandler {
                     ps.setString(8, partnerId);
                     ps.executeUpdate();
                 }
-
             } else {
-
                 String sql = """
                         INSERT INTO partner_finance
                         (partner_id, account_holder_name, bank_name, account_number, ifsc_swift,
@@ -120,7 +119,6 @@ public class UpdateBankDetailsHandler implements HttpHandler {
                         """;
 
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
-
                     ps.setString(1, partnerId);
                     ps.setString(2, accountHolderName);
                     ps.setString(3, bankName);
@@ -141,6 +139,12 @@ public class UpdateBankDetailsHandler implements HttpHandler {
             sendResponse(exchange, 500,
                     "{\"status\":\"error\",\"message\":\"" + escape(e.getMessage()) + "\"}");
         }
+    }
+
+    // Helper to ensure "savings" becomes "Savings" to match the ENUM
+    private String capitalize(String str) {
+        if (str == null || str.isEmpty()) return str;
+        return str.substring(0, 1).toUpperCase() + str.substring(1);
     }
 
     private boolean exists(Connection conn, String sql, String value) throws Exception {
