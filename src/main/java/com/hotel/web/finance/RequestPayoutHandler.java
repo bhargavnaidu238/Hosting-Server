@@ -1,6 +1,7 @@
 package com.hotel.web.finance;
 
 import com.hotel.utilities.DbConfig;
+import com.hotel.notification.service.EmailService; // Ensure this import exists
 import com.sun.net.httpserver.*;
 import java.io.*;
 import java.net.URLDecoder;
@@ -11,7 +12,7 @@ import java.util.*;
 
 public class RequestPayoutHandler implements HttpHandler {
 
-	private final DbConfig dbConfig;
+    private final DbConfig dbConfig;
 
     public RequestPayoutHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
@@ -68,20 +69,18 @@ public class RequestPayoutHandler implements HttpHandler {
         boolean oldAutoCommit = true;
 
         try {
-
-            /**COMPUTE COMPLETED BOOKINGS REVENUE **/
+            /** COMPUTE COMPLETED BOOKINGS REVENUE **/
             bookConn = dbConfig.getCustomerDataSource().getConnection();
             double totalRevenue = computeTotalRevenueFromBookings(bookConn, partnerId);
             totalRevenue = round2(totalRevenue);
 
-            /**FETCH FINANCE ROW WITH LOCK **/
+            /** FETCH FINANCE ROW WITH LOCK **/
             finConn = dbConfig.getPartnerDataSource().getConnection();
             oldAutoCommit = finConn.getAutoCommit();
             finConn.setAutoCommit(false);
 
             double commissionPercent = 0;
-            String selectSQL =
-                    "SELECT commission_percentage, paid_payout, pending_payout FROM partner_finance WHERE partner_id=? FOR UPDATE";
+            String selectSQL = "SELECT commission_percentage, paid_payout, pending_payout FROM partner_finance WHERE partner_id=? FOR UPDATE";
 
             try (PreparedStatement ps = finConn.prepareStatement(selectSQL)) {
                 ps.setString(1, partnerId);
@@ -98,17 +97,13 @@ public class RequestPayoutHandler implements HttpHandler {
                     commissionPercent = FALLBACK_COMMISSION_PERCENT;
             }
 
-            /** Commission & Net revenue **/
             double commissionAmount = round2(totalRevenue * commissionPercent / 100.0);
             double netRevenue = round2(totalRevenue - commissionAmount);
-
             requestedAmount = round2(requestedAmount);
 
-            /** Compute balance (this is the Balance_Amount that will be stored in Partner_Transactions) **/
             double balanceAmount = round2(netRevenue - requestedAmount);
             if (balanceAmount < 0) balanceAmount = 0.0;
 
-            /** Validate requested amount does not exceed available pending (netRevenue) **/
             if (requestedAmount > netRevenue) {
                 finConn.rollback();
                 sendResponse(exchange, 200,
@@ -116,10 +111,7 @@ public class RequestPayoutHandler implements HttpHandler {
                 return;
             }
 
-            /**UPDATE FINANCE TABLE — mapping explicitly as you requested:
-                 pending_payout = balance_amount (from transaction)
-                 paid_payout    = withdrawal_amount (requestedAmount for THIS transaction)
-                 Also update total_revenue, net_revenue, commission_percentage, last_payout_date **/
+            /** UPDATE FINANCE TABLE **/
             String updateFinanceSQL = """
                     UPDATE partner_finance
                     SET total_revenue = ?,
@@ -127,30 +119,31 @@ public class RequestPayoutHandler implements HttpHandler {
                         net_revenue = ?,
                         pending_payout = ?,
                         paid_payout = ?,
-                        last_payout_fate = ?
+                        last_payout_date = ?
                     WHERE partner_id = ?
                     """;
 
             Date txDate = new java.sql.Date(System.currentTimeMillis());
 
             try (PreparedStatement upd = finConn.prepareStatement(updateFinanceSQL)) {
-                upd.setDouble(1, totalRevenue);                     // Total_Revenue
-                upd.setDouble(2, commissionPercent);                // Commission_Percentage
-                upd.setDouble(3, netRevenue);                       // Net_Revenue
-                upd.setDouble(4, balanceAmount);                    // Pending_Payout <- Balance_Amount
-                upd.setDouble(5, requestedAmount);                  // Paid_Payout    <- Withdrawal_Amount (this tx)
-                upd.setDate(6, txDate);                             // Last_Payout_Date <- Transaction_Date
+                upd.setDouble(1, totalRevenue);
+                upd.setDouble(2, commissionPercent);
+                upd.setDouble(3, netRevenue);
+                upd.setDouble(4, balanceAmount);
+                upd.setDouble(5, requestedAmount);
+                upd.setDate(6, txDate);
                 upd.setString(7, partnerId);
                 upd.executeUpdate();
             }
 
-            /**INSERT TRANSACTION **/
+            /** INSERT TRANSACTION **/
             String txId = "TX_" + System.currentTimeMillis();
+            String finalComments = comments;
 
             String insert = """
                     INSERT INTO partner_transactions
                     (partner_id, transaction_id, transaction_date, total_amount, withdrawal_amount, balance_amount,
-                     Sstatus, transaction_type, comments)
+                     status, transaction_type, comments)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """;
 
@@ -158,39 +151,65 @@ public class RequestPayoutHandler implements HttpHandler {
                 ins.setString(1, partnerId);
                 ins.setString(2, txId);
                 ins.setTimestamp(3, new Timestamp(System.currentTimeMillis()));
-                ins.setDouble(4, netRevenue);         // Total_Amount -> Net revenue
-                ins.setDouble(5, requestedAmount);    // Withdrawal_Amount
-                ins.setDouble(6, balanceAmount);      // Balance_Amount
+                ins.setDouble(4, netRevenue);
+                ins.setDouble(5, requestedAmount);
+                ins.setDouble(6, balanceAmount);
                 ins.setString(7, "Requested");
                 ins.setString(8, "PAYOUT");
-                ins.setString(9, comments);
+                ins.setString(9, finalComments);
                 ins.executeUpdate();
             }
 
-            /**HANDLE IF STATUS LATER BECOMES FAILED
-             * This rollback logic will:
-             *  - add the transaction's Withdrawal_Amount back to Partner_Finance.Pending_Payout
-             *  - subtract Withdrawal_Amount from Partner_Finance.Paid_Payout
-             *  - set Partner_Transactions.Withdrawal_Amount = 0
-             *
-             * We update rows for this partner where the transaction status is 'Failed'.
-             */
-            String failureSQL = """
-                    UPDATE partner_finance F
-                    JOIN partner_transactions T ON F.partner_id = T.partner_id
-                    SET
-                        F.pending_payout = F.pending_payout + T.withdrawal_amount,
-                        F.pending_payout = F.pending_payout - T.withdrawal_amount,
-                        T.withdrawal_amount = 0
-                    WHERE T.status = 'Failed' AND T.partner_id = ?
-                    """;
+            finConn.commit();
 
-            try (PreparedStatement ps = finConn.prepareStatement(failureSQL)) {
-                ps.setString(1, partnerId);
-                ps.executeUpdate();
+            /** FETCH PARTNER EMAIL & BANK INFO FOR NOTIFICATION **/
+            String partnerDetailsSQL = "SELECT partner_name, email, bank_account_number FROM partner_data WHERE partner_id = ?";
+            String partnerName = "Partner";
+            String partnerEmail = null;
+            String bankAccount = "N/A";
+
+            try (PreparedStatement psDetail = finConn.prepareStatement(partnerDetailsSQL)) {
+                psDetail.setString(1, partnerId);
+                ResultSet rsDetail = psDetail.executeQuery();
+                if (rsDetail.next()) {
+                    partnerName = rsDetail.getString("partner_name");
+                    partnerEmail = rsDetail.getString("email");
+                    String fullAcc = rsDetail.getString("bank_account_number");
+                    bankAccount = (fullAcc != null && fullAcc.length() > 4) 
+                                  ? "XXXX" + fullAcc.substring(fullAcc.length() - 4) 
+                                  : fullAcc;
+                }
             }
 
-            finConn.commit();
+            /** SEND EMAIL NOTIFICATION (ASYNC) **/
+            if (partnerEmail != null) {
+                final String emailTo = partnerEmail;
+                final String name = partnerName;
+                final String acc = bankAccount;
+                final double reqAmt = requestedAmount;
+                final double pendAmt = balanceAmount;
+                
+                new Thread(() -> {
+                    try {
+                        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                        String subject = "Payout Request Received - " + txId;
+                        String msg = "Hello " + name + ",\n\n" +
+                                     "We have received your payout request. Details are below:\n\n" +
+                                     "Transaction ID: " + txId + "\n" +
+                                     "Requested Amount: ₹" + reqAmt + "\n" +
+                                     "Remaining Balance: ₹" + pendAmt + "\n" +
+                                     "Settlement Account: " + acc + "\n" +
+                                     "Status: REQUESTED\n" +
+                                     "Comments: " + finalComments + "\n\n" +
+                                     "Your request is being processed by our finance team.\n\n" +
+                                     "Regards,\nHotel Management Team";
+                        
+                        emailService.sendEmail(emailTo, subject, msg);
+                    } catch (Exception e) {
+                        System.err.println("Payout Email Failed: " + e.getMessage());
+                    }
+                }).start();
+            }
 
             sendResponse(exchange, 200,
                     "{\"status\":\"success\",\"message\":\"Payout requested\",\"transaction_id\":\"" + txId + "\"}");
@@ -205,13 +224,8 @@ public class RequestPayoutHandler implements HttpHandler {
         }
     }
 
-    /** Helpers **/
-
     private double computeTotalRevenueFromBookings(Connection conn, String partnerId) throws Exception {
-        String sql = """
-            SELECT SUM(original_amount) AS total
-            FROM bookings_info
-            WHERE partner_id=? AND booking_status='COMPLETED'""";
+        String sql = "SELECT SUM(original_amount) AS total FROM bookings_info WHERE partner_id=? AND booking_status='COMPLETED'";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, partnerId);
             ResultSet rs = ps.executeQuery();
