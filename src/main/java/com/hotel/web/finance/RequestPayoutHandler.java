@@ -140,23 +140,23 @@ public class RequestPayoutHandler implements HttpHandler {
             String txId = "TX_" + System.currentTimeMillis();
             String finalComments = comments;
 
-            String insert = """
-                    INSERT INTO partner_transactions
-                    (partner_id, transaction_id, transaction_date, total_amount, withdrawal_amount, balance_amount,
-                     status, transaction_type, comments)
-                    VALUES (?, ?, ?, ?, ?, ?, ?::payment_status_enum, ?::transaction_type_enum, ?)
-                    """;
+            String insertQuery = """
+                INSERT INTO Partner_Transactions 
+                (Partner_ID, Transaction_ID, Transaction_Date, Total_Amount, Withdrawal_Amount, 
+                 Balance_Amount, Status, Transaction_Type, Comments) 
+                VALUES (?, ?, ?, ?, ?, ?, ?::payment_status_enum, ?::transaction_type_enum, ?)
+                """;
 
-            try (PreparedStatement ins = finConn.prepareStatement(insert)) {
+            try (PreparedStatement ins = finConn.prepareStatement(insertQuery)) {
                 ins.setString(1, partnerId);
                 ins.setString(2, txId);
                 ins.setTimestamp(3, new Timestamp(System.currentTimeMillis()));
                 ins.setDouble(4, netRevenue);
                 ins.setDouble(5, requestedAmount);
                 ins.setDouble(6, balanceAmount);
-                ins.setString(7, "Requested");
-                ins.setString(8, "PAYOUT");
-                ins.setString(9, finalComments);
+                ins.setString(7, "Requested"); 
+                ins.setString(8, "PAYOUT"); 
+                ins.setString(9, comments);
                 ins.executeUpdate();
             }
 
