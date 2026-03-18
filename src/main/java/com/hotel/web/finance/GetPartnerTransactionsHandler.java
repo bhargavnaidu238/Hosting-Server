@@ -86,25 +86,73 @@ public class GetPartnerTransactionsHandler implements HttpHandler {
         sendResponse(exchange, 200, response);
     }
 
-    // ======================================================================
-    // AUTO REVERSE FINANCE WHEN FAILED
-    // ======================================================================
-    private void adjustFinanceForFailed(Connection conn, String partnerId, double amount) {
+ // AUTO REVERSE FINANCE WHEN FAILED OR REJECTED
+    private void adjustFinanceForFailed(Connection conn, String partnerId, double amount, String reason) {
         try {
-            String checkSql =
+            // 1. UPDATE THE DATABASE (Reverse the balance)
+            String checkSql = 
                     "UPDATE Partner_Finance " +
-                            "SET Pending_Payout = Pending_Payout + ?, " +
-                            "Paid_Payout = Paid_Payout - ? " +
-                            "WHERE Partner_ID = ? AND Paid_Payout >= ?";
-            PreparedStatement ps = conn.prepareStatement(checkSql);
-            ps.setDouble(1, amount);
-            ps.setDouble(2, amount);
-            ps.setString(3, partnerId);
-            ps.setDouble(4, amount);
-            ps.executeUpdate();
-        } catch (Exception ignored) {
-            ignored.printStackTrace();
+                    "SET Pending_Payout = Pending_Payout + ?, " +
+                    "Paid_Payout = Paid_Payout - ? " +
+                    "WHERE Partner_ID = ? AND Paid_Payout >= ?";
+            
+            try (PreparedStatement ps = conn.prepareStatement(checkSql)) {
+                ps.setDouble(1, amount);
+                ps.setDouble(2, amount);
+                ps.setString(3, partnerId);
+                ps.setDouble(4, amount);
+                
+                int rowsUpdated = ps.executeUpdate();
+                
+                // 2. IF THE REVERSAL WAS SUCCESSFUL, TRIGGER THE EMAIL
+                if (rowsUpdated > 0) {
+                    triggerFailureNotification(partnerId, amount, reason);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[FinanceAdjustmentError] Failed to reverse payout: " + e.getMessage());
+            e.printStackTrace();
         }
+    }
+
+    /**
+     * Sends a background email notification when a payout is reversed/failed.
+     */
+    private void triggerFailureNotification(String pid, double amount, String reason) {
+        new Thread(() -> {
+            // Background thread opens its OWN fresh connection to avoid "Connection Closed" errors
+            try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+                String sql = "SELECT partner_name, email FROM partner_data WHERE partner_id = ?";
+                
+                try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                    ps.setString(1, pid);
+                    ResultSet rs = ps.executeQuery();
+                    
+                    if (rs.next()) {
+                        String name = rs.getString("partner_name");
+                        String email = rs.getString("email");
+
+                        System.out.println("[EmailService] Sending Payout Failure alert to: " + email);
+
+                        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                        
+                        String subject = "Update: Payout Request Failed/Rejected";
+                        String body = "Hello " + name + ",\n\n" +
+                                     "Your recent payout request of ₹" + amount + " has been marked as FAILED or REJECTED.\n\n" +
+                                     "Important: The requested amount of ₹" + amount + " has been successfully reversed and added back to your Pending Payout balance.\n\n" +
+                                     "Reason for rejection/failure: " + (reason != null ? reason : "Administrative review/Technical issue") + "\n\n" +
+                                     "You can now re-request the payout or contact support for further assistance.\n\n" +
+                                     "Regards,\nFinance Team";
+
+                        emailService.sendEmail(email, subject, body);
+                        System.out.println("[EmailService] Failure notification delivered for partner: " + pid);
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("[EmailService] Failure Notification Error: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }).start();
     }
 
     private String readBody(HttpExchange exchange) throws IOException {
