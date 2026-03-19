@@ -10,6 +10,7 @@ import java.io.*;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
+import java.sql.Date;
 import java.time.LocalDate;
 import java.util.*;
 
@@ -163,10 +164,10 @@ public class WebBookingHandler implements HttpHandler {
                 try (ResultSet rs = fetchStmt.executeQuery()) {
                     if (rs.next()) {
                         currentStatus = rs.getString("booking_status").toUpperCase();
-                        String checkIn = rs.getString("check_in_date");
-                        String checkOut = rs.getString("check_out_date");
-                        if (checkIn != null && !checkIn.isEmpty()) checkInDate = LocalDate.parse(checkIn.split(" ")[0]);
-                        if (checkOut != null && !checkOut.isEmpty()) checkOutDate = LocalDate.parse(checkOut.split(" ")[0]);
+                        Date checkIn = rs.getDate("check_in_date");
+                        Date checkOut = rs.getDate("check_out_date");
+                        if (checkIn != null) checkInDate = checkIn.toLocalDate();
+                        if (checkOut != null) checkOutDate = checkOut.toLocalDate();
                     }
                 }
 
@@ -228,27 +229,26 @@ public class WebBookingHandler implements HttpHandler {
                  Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()) {
 
                 // 1. Fetch Booking Details
-                String bookingSql = "SELECT partner_id, guest_name, check_in_date, check_out_date, room_type, amount_paid_online" +
+                String bookingSql = "SELECT partner_id, guest_name, check_in_date, check_out_date, room_type, amount_paid_online " +
                                   "FROM bookings_info WHERE booking_id = ?";
                 
-                String partnerId = "";
-                String checkIn = "", checkOut = "", custName = "", room = "", total = "";
+                String partnerId = "", gName = "", cin = "", cout = "", rType = "", amt = "";
 
                 try (PreparedStatement ps = customerConn.prepareStatement(bookingSql)) {
                     ps.setString(1, bookingId);
                     ResultSet rs = ps.executeQuery();
                     if (rs.next()) {
                         partnerId = rs.getString("partner_id");
-                        custName = rs.getString("guest_name");
-                        checkIn = rs.getString("check_in_date");
-                        checkOut = rs.getString("check_out_date");
-                        room = rs.getString("room_type");
-                        total = rs.getString("amount_paid_online");
+                        gName = rs.getString("guest_name");
+                        cin = rs.getString("check_in_date");
+                        cout = rs.getString("check_out_date");
+                        rType = rs.getString("room_type");
+                        amt = rs.getString("amount_paid_online");
                     }
                 }
 
-                // 2. Fetch Partner Contact Info
-                if (!partnerId.isEmpty()) {
+                // 2. Fetch Partner Contact Info and Send Email
+                if (partnerId != null && !partnerId.isEmpty()) {
                     String partnerSql = "SELECT partner_name, email FROM partner_data WHERE partner_id = ?";
                     try (PreparedStatement ps2 = partnerConn.prepareStatement(partnerSql)) {
                         ps2.setString(1, partnerId);
@@ -258,24 +258,24 @@ public class WebBookingHandler implements HttpHandler {
                             String pEmail = rs2.getString("email");
 
                             EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
-                            String subject = "Booking Update: ID #" + bookingId + " is now " + status;
+                            String subject = "Booking Notification: ID #" + bookingId + " is " + status;
                             
                             StringBuilder body = new StringBuilder();
                             body.append("Hello ").append(pName).append(",\n\n");
-                            body.append("There is an update regarding a booking at your property:\n\n");
+                            body.append("A booking status at your property has been updated to: ").append(status).append("\n\n");
+                            body.append("--- Booking Details ---\n");
                             body.append("Booking ID: ").append(bookingId).append("\n");
-                            body.append("Customer: ").append(custName).append("\n");
-                            body.append("Room Type: ").append(room).append("\n");
-                            body.append("Check-in: ").append(checkIn).append("\n");
-                            body.append("Check-out: ").append(checkOut).append("\n");
-                            body.append("Total Amount: ₹").append(total).append("\n");
-                            body.append("Current Status: ").append(status).append("\n\n");
+                            body.append("Guest Name: ").append(gName).append("\n");
+                            body.append("Room Type: ").append(rType).append("\n");
+                            body.append("Check-in: ").append(cin).append("\n");
+                            body.append("Check-out: ").append(cout).append("\n");
+                            body.append("Amount Paid: ₹").append(amt != null ? amt : "0.00").append("\n\n");
 
                             if ("PENDING".equalsIgnoreCase(status)) {
-                                body.append("ACTION REQUIRED: This booking is currently PENDING. Please log in to the Partner Portal and CONFIRM this booking based on your current room availability.\n\n");
+                                body.append("ACTION REQUIRED: This booking is currently PENDING. Please verify availability and CONFIRM this booking in the Partner Portal to avoid guest inconvenience.\n\n");
                             }
 
-                            body.append("Regards,\nHotel Management Team");
+                            body.append("Regards,\nHotel Operations Team");
 
                             emailService.sendEmail(pEmail, subject, body.toString());
                         }
