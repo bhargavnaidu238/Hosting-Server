@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hotel.utilities.DbConfig;
+import com.hotel.notification.service.EmailService;
 
 import java.io.*;
 import java.net.URLDecoder;
@@ -46,7 +47,7 @@ public class WebBookingHandler implements HttpHandler {
     private void addCORSHeaders(HttpExchange exchange) {
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
     }
 
     private Map<String, String> parsePostBody(HttpExchange exchange) throws IOException {
@@ -84,7 +85,7 @@ public class WebBookingHandler implements HttpHandler {
         String partnerId = getQueryParam(exchange, "partnerId");
         List<Map<String, String>> bookings = new ArrayList<>();
 
-        String sql = "SELECT * FROM bookings_info WHERE partner_id = ?";
+        String sql = "SELECT * FROM bookings_info WHERE partner_id = ? ORDER BY booking_id DESC";
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -122,6 +123,9 @@ public class WebBookingHandler implements HttpHandler {
                  PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setString(1, bookingId);
                 success = stmt.executeUpdate() > 0;
+                if (success) {
+                    triggerBookingNotification(bookingId, "CANCELLED");
+                }
             } catch (SQLException e) { e.printStackTrace(); }
         }
 
@@ -185,7 +189,6 @@ public class WebBookingHandler implements HttpHandler {
                                   && checkOutDate != null && !checkOutDate.isAfter(today);
                         break;
                     case "COMPLETED":
-                        // Final Fix: Allowed if status is CONFIRMED, CHECKED_IN, or CHECKED_OUT
                         allowed = "CONFIRMED".equals(currentStatus) || 
                                   "CHECKED_IN".equals(currentStatus) || 
                                   "CHECKED_OUT".equals(currentStatus);
@@ -197,7 +200,12 @@ public class WebBookingHandler implements HttpHandler {
                         updateStmt.setString(1, newStatus);
                         updateStmt.setString(2, bookingId);
                         success = updateStmt.executeUpdate() > 0;
-                        message = success ? "Status updated successfully" : "Update failed";
+                        if (success) {
+                            message = "Status updated successfully";
+                            triggerBookingNotification(bookingId, newStatus);
+                        } else {
+                            message = "Update failed";
+                        }
                     }
                 } else {
                     message = "Action " + newStatus + " not allowed for current status: " + currentStatus;
@@ -212,5 +220,70 @@ public class WebBookingHandler implements HttpHandler {
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(200, response.getBytes(StandardCharsets.UTF_8).length);
         try (OutputStream os = exchange.getResponseBody()) { os.write(response.getBytes(StandardCharsets.UTF_8)); }
+    }
+
+    private void triggerBookingNotification(String bookingId, String status) {
+        new Thread(() -> {
+            try (Connection customerConn = dbConfig.getCustomerDataSource().getConnection();
+                 Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()) {
+
+                // 1. Fetch Booking Details
+                String bookingSql = "SELECT partner_id, customer_name, check_in_date, check_out_date, room_type, total_amount " +
+                                  "FROM bookings_info WHERE booking_id = ?";
+                
+                String partnerId = "";
+                String checkIn = "", checkOut = "", custName = "", room = "", total = "";
+
+                try (PreparedStatement ps = customerConn.prepareStatement(bookingSql)) {
+                    ps.setString(1, bookingId);
+                    ResultSet rs = ps.executeQuery();
+                    if (rs.next()) {
+                        partnerId = rs.getString("partner_id");
+                        custName = rs.getString("customer_name");
+                        checkIn = rs.getString("check_in_date");
+                        checkOut = rs.getString("check_out_date");
+                        room = rs.getString("room_type");
+                        total = rs.getString("total_amount");
+                    }
+                }
+
+                // 2. Fetch Partner Contact Info
+                if (!partnerId.isEmpty()) {
+                    String partnerSql = "SELECT partner_name, email FROM partner_data WHERE partner_id = ?";
+                    try (PreparedStatement ps2 = partnerConn.prepareStatement(partnerSql)) {
+                        ps2.setString(1, partnerId);
+                        ResultSet rs2 = ps2.executeQuery();
+                        if (rs2.next()) {
+                            String pName = rs2.getString("partner_name");
+                            String pEmail = rs2.getString("email");
+
+                            EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                            String subject = "Booking Update: ID #" + bookingId + " is now " + status;
+                            
+                            StringBuilder body = new StringBuilder();
+                            body.append("Hello ").append(pName).append(",\n\n");
+                            body.append("There is an update regarding a booking at your property:\n\n");
+                            body.append("Booking ID: ").append(bookingId).append("\n");
+                            body.append("Customer: ").append(custName).append("\n");
+                            body.append("Room Type: ").append(room).append("\n");
+                            body.append("Check-in: ").append(checkIn).append("\n");
+                            body.append("Check-out: ").append(checkOut).append("\n");
+                            body.append("Total Amount: ₹").append(total).append("\n");
+                            body.append("Current Status: ").append(status).append("\n\n");
+
+                            if ("PENDING".equalsIgnoreCase(status)) {
+                                body.append("ACTION REQUIRED: This booking is currently PENDING. Please log in to the Partner Portal and CONFIRM this booking based on your current room availability.\n\n");
+                            }
+
+                            body.append("Regards,\nHotel Management Team");
+
+                            emailService.sendEmail(pEmail, subject, body.toString());
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("[BookingNotificationError] Failed to send email: " + e.getMessage());
+            }
+        }).start();
     }
 }
