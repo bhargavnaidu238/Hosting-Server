@@ -13,13 +13,11 @@ public class EmailService {
 
     private final String senderEmail;
     private final SendGrid sendGrid;
-	private String apiKey;
 
     public EmailService(String apiKey, String senderEmail) {
         if (apiKey == null || apiKey.isEmpty() || senderEmail == null || senderEmail.isEmpty()) {
             throw new RuntimeException("Email configuration (API Key or Sender) is missing!");
         }
-        this.apiKey = apiKey;
         this.senderEmail = senderEmail;
         this.sendGrid = new SendGrid(apiKey);
     }
@@ -29,10 +27,16 @@ public class EmailService {
      * Supports both plain text and HTML if needed.
      */
     public void sendEmail(String recipientEmail, String subject, String body) throws IOException {
+        // Validation to prevent empty calls
+        if (recipientEmail == null || recipientEmail.isEmpty()) {
+            throw new IOException("Recipient email is null or empty");
+        }
+
         Email from = new Email(senderEmail);
         Email to = new Email(recipientEmail);
         
-        // Use text/html if you want to send styled emails later, otherwise text/plain is fine.
+        // Using "text/plain" for now. If you want to use <b> or <br> tags later, 
+        // change this to "text/html"
         Content content = new Content("text/plain", body);
         Mail mail = new Mail(from, subject, to, content);
 
@@ -40,21 +44,22 @@ public class EmailService {
         try {
             request.setMethod(Method.POST);
             request.setEndpoint("mail/send");
-            request.setBody(mail.build());
+            request.setBody(mail.build()); // This converts the Mail object to the JSON SendGrid expects
 
             Response response = sendGrid.api(request);
 
             // SendGrid success code for "Accepted" is 202
+            // We check for any 2xx status code
             if (response.getStatusCode() >= 200 && response.getStatusCode() < 300) {
                 System.out.println("[EmailService] Success: Email sent to " + recipientEmail + 
                                    " (Status: " + response.getStatusCode() + ")");
             } else {
-                // IMPORTANT: Throwing an exception so the Handler knows it failed
-                throw new IOException("SendGrid failure. Status: " + response.getStatusCode() + 
-                                      " Body: " + response.getBody());
+                // Log the body error for easier debugging in the console
+                System.err.println("[EmailService] SendGrid Error Body: " + response.getBody());
+                throw new IOException("SendGrid failure. Status: " + response.getStatusCode());
             }
         } catch (IOException ex) {
-            System.err.println("[EmailService] Error sending email: " + ex.getMessage());
+            System.err.println("[EmailService] Exception sending email: " + ex.getMessage());
             throw ex;
         }
     }
