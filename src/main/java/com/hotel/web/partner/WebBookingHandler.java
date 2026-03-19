@@ -228,7 +228,7 @@ public class WebBookingHandler implements HttpHandler {
                  Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()) {
 
                 // 1. Fetch Booking Details
-                String bookingSql = "SELECT partner_id, customer_name, check_in_date, check_out_date, room_type, total_amount " +
+                String bookingSql = "SELECT partner_id, guest_name, check_in_date, check_out_date, room_type, amount_paid_online" +
                                   "FROM bookings_info WHERE booking_id = ?";
                 
                 String partnerId = "";
@@ -239,11 +239,11 @@ public class WebBookingHandler implements HttpHandler {
                     ResultSet rs = ps.executeQuery();
                     if (rs.next()) {
                         partnerId = rs.getString("partner_id");
-                        custName = rs.getString("customer_name");
+                        custName = rs.getString("guest_name");
                         checkIn = rs.getString("check_in_date");
                         checkOut = rs.getString("check_out_date");
                         room = rs.getString("room_type");
-                        total = rs.getString("total_amount");
+                        total = rs.getString("amount_paid_online");
                     }
                 }
 
