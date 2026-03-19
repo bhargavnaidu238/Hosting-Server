@@ -105,10 +105,6 @@ public class WebDashBoardHandler implements HttpHandler {
 
     private BookingData getBookingStats(String partnerId) throws Exception {
 
-        /* FIX: We cast booking_status to ::TEXT. 
-           This prevents the 'function upper(booking_status_enum) does not exist' error
-           if the driver or database tries to perform string operations.
-        */
         String sql =
                 """
                 SELECT
