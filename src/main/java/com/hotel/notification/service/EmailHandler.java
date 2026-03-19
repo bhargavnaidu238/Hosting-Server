@@ -23,7 +23,7 @@ public class EmailHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // 1. CORS Headers
+        // CORS Headers
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -50,15 +50,16 @@ public class EmailHandler implements HttpHandler {
                 }
                 handleSendOtp(exchange, email, "Verification Code", "Your verification OTP is: ");
             } 
-            else if ("forgot_password_otp".equals(type)) {
-                if (!checkUserExists(email)) {
-                    sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"This email is not registered with us.\"}");
-                    return;
+            else if ("forgot_password_verify".equals(type)) {
+                String inputMobile = normalizeMobile(body.getOrDefault("mobile", ""));
+                if (verifyUserAndMobile(email, inputMobile)) {
+                    // Logic: If user and mobile match, trigger the OTP sending process
+                    handleSendOtp(exchange, email, "Reset Your Password", "You requested to reset your password. Your OTP is: ");
+                } else {
+                    sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Email or mobile number not matching\"}");
                 }
-                handleSendOtp(exchange, email, "Reset Your Password", "You requested to reset your password. Your OTP is: ");
-            } 
+            }
             else if ("verify_otp".equals(type)) {
-                // Trim user input to remove accidental leading/trailing spaces
                 String otp = body.getOrDefault("otp", "").trim();
                 handleVerifyOtp(exchange, email, otp);
             } 
@@ -69,6 +70,24 @@ public class EmailHandler implements HttpHandler {
             e.printStackTrace();
             sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"Internal Server Error\"}");
         }
+    }
+
+    /**
+     * Verifies if the email exists and the normalized mobile number matches.
+     */
+    private boolean verifyUserAndMobile(String email, String inputMobile) throws SQLException {
+        String query = "SELECT mobile_number FROM user_info WHERE LOWER(user_email) = ? AND status = 'Active'";
+        try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+            pstmt.setString(1, email.toLowerCase());
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    String dbMobile = normalizeMobile(rs.getString("mobile_number"));
+                    return inputMobile.equals(dbMobile);
+                }
+            }
+        }
+        return false;
     }
 
     private boolean checkUserExists(String email) throws SQLException {
@@ -111,26 +130,22 @@ public class EmailHandler implements HttpHandler {
 
     private void handleVerifyOtp(HttpExchange exchange, String email, String userOtp) throws Exception {
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-            // FIX: Ensure lookup is case-insensitive
             String query = "SELECT otp_code, otp_expiry, attempts FROM email_verification_otp WHERE LOWER(email) = ?";
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
                 stmt.setString(1, email.toLowerCase());
                 try (ResultSet rs = stmt.executeQuery()) {
                     if (rs.next()) {
-                        // CRITICAL FIX: Trim the stored code from DB to avoid CHAR padding issues
                         String storedOtp = rs.getString("otp_code").trim();
                         Timestamp expiry = rs.getTimestamp("otp_expiry");
                         int attempts = rs.getInt("attempts");
 
-                        if (attempts > 10) { // Limit attempts for security
+                        if (attempts > 10) {
                             sendResponse(exchange, 429, "{\"status\":\"error\",\"message\":\"Max attempts reached.\"}");
                         } else if (expiry.before(new Timestamp(System.currentTimeMillis()))) {
                             sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"OTP expired\"}");
                         } else if (storedOtp.equals(userOtp)) {
-                            // SUCCESS
                             sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP verified\"}");
                         } else {
-                            // LOGIC reached: Data in DB and Input truly don't match
                             sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Enter Wrong OTP Please try again.\"}");
                         }
                     } else {
@@ -139,6 +154,15 @@ public class EmailHandler implements HttpHandler {
                 }
             }
         }
+    }
+
+    private String normalizeMobile(String mobile) {
+        if (mobile == null) return "";
+        String digitsOnly = mobile.replaceAll("[^0-9]", "");
+        if (digitsOnly.length() >= 10) {
+            return digitsOnly.substring(digitsOnly.length() - 10);
+        }
+        return digitsOnly;
     }
 
     private void sendResponse(HttpExchange exchange, int status, String response) throws IOException {
