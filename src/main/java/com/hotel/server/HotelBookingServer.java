@@ -44,14 +44,14 @@ public class HotelBookingServer {
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "10000"));
         HttpServer server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
-        System.out.println("🚀 Server starting on port: " + port);
+        System.out.println("Server starting on port: " + port);
 
         DbConfig dbConfig = new DbConfig();
         try (Connection customerConn = dbConfig.getCustomerDataSource().getConnection();
              Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()) {
-            System.out.println("✅ Database connections validated successfully");
+            System.out.println("Database connections validated successfully");
         } catch (Exception e) {
-            System.err.println("❌ Database connection failed!");
+            System.err.println("Database connection failed!");
             e.printStackTrace();
             System.exit(1);
         }
@@ -123,13 +123,13 @@ public class HotelBookingServer {
         server.setExecutor(Executors.newFixedThreadPool(20));
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("🛑 Shutting down server...");
+            System.out.println("Shutting down server...");
             dbConfig.close();
             server.stop(1);
         }));
 
         server.start();
-        System.out.println("✅ Server started successfully on port " + port);
+        System.out.println("Server started successfully on port " + port);
     }
 
     /**
@@ -170,7 +170,7 @@ public class HotelBookingServer {
         if (responseCode == 200 || responseCode == 201) {
             return supabaseUrl + "/storage/v1/object/public/" + bucketName + "/" + fileName;
         } else {
-            // ✅ FIX: Improved Error Handling to avoid memory leaks
+            //FIX: Improved Error Handling to avoid memory leaks
             StringBuilder errorMsg = new StringBuilder();
             InputStream errorStream = conn.getErrorStream();
             if (errorStream != null) {

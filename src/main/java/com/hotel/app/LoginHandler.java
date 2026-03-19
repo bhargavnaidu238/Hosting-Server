@@ -2,6 +2,7 @@ package com.hotel.app;
 
 import com.hotel.security.PasswordUtil;
 import com.hotel.utilities.DbConfig;
+import com.hotel.notification.service.EmailService;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import org.json.JSONObject;
@@ -9,6 +10,7 @@ import org.json.JSONObject;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
+import java.util.Random;
 
 public class LoginHandler implements HttpHandler {
 
@@ -20,6 +22,15 @@ public class LoginHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        // Add CORS Headers for Flutter App compatibility
+        exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
 
         if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(405, -1);
@@ -58,43 +69,29 @@ public class LoginHandler implements HttpHandler {
         }
     }
 
-    /* ================= LOGIN (UNCHANGED) ================= */
+    /* ================= LOGIN ================= */
 
     private void handleLogin(HttpExchange exchange, JSONObject json) throws Exception {
-
         String email = json.getString("email").trim().toLowerCase();
         String rawPassword = json.getString("password");
 
-        if (!email.endsWith("@gmail.com")) {
-            sendJsonResponse(exchange, 400,
-                    new JSONObject().put("error", "invalid_email").toString());
-            return;
-        }
-
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
-
             String sql = "SELECT * FROM user_info WHERE user_email = ?";
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
-
                 ps.setString(1, email);
-
                 try (ResultSet rs = ps.executeQuery()) {
-
                     if (!rs.next()) {
-                        sendJsonResponse(exchange, 404,
-                                new JSONObject().put("error", "user_not_exists").toString());
+                        sendJsonResponse(exchange, 404, new JSONObject().put("error", "user_not_exists").toString());
                         return;
                     }
 
                     if ("Inactive".equalsIgnoreCase(rs.getString("status"))) {
-                        sendJsonResponse(exchange, 403,
-                                new JSONObject().put("error", "inactive").toString());
+                        sendJsonResponse(exchange, 403, new JSONObject().put("error", "inactive").toString());
                         return;
                     }
 
-                    if (!PasswordUtil.verifyPassword(rawPassword, rs.getString("Password"))) {
-                        sendJsonResponse(exchange, 401,
-                                new JSONObject().put("error", "wrong_password").toString());
+                    if (!PasswordUtil.verifyPassword(rawPassword, rs.getString("password"))) {
+                        sendJsonResponse(exchange, 401, new JSONObject().put("error", "wrong_password").toString());
                         return;
                     }
 
@@ -105,33 +102,23 @@ public class LoginHandler implements HttpHandler {
                     user.put("email", rs.getString("user_email"));
                     user.put("mobile", rs.getString("mobile_number"));
                     user.put("address", rs.getString("address"));
-
                     sendJsonResponse(exchange, 200, user.toString());
                 }
             }
         }
     }
 
-    /* ================= FORGOT PASSWORD VERIFY (FIXED) ================= */
+    /* ================= FORGOT PASSWORD VERIFY (WITH OTP) ================= */
 
     private void handleForgotVerify(HttpExchange exchange, JSONObject json) throws Exception {
-
         String email = json.getString("email").trim().toLowerCase();
         String inputMobile = normalizeMobile(json.getString("mobile"));
-
         boolean matched = false;
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
-
-            String sql = """
-                SELECT mobile_number FROM user_info
-                WHERE user_email = ?
-                  AND status = 'Active'
-            """;
-
+            String sql = "SELECT mobile_number FROM user_info WHERE user_email = ? AND status = 'Active'";
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, email);
-
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) {
                         String dbMobile = normalizeMobile(rs.getString("mobile_number"));
@@ -141,76 +128,103 @@ public class LoginHandler implements HttpHandler {
             }
         }
 
-        sendJsonResponse(exchange, 200,
-                new JSONObject().put("matched", matched).toString());
+        if (matched) {
+            // Trigger OTP Generation and Emailing
+            triggerPasswordResetOtp(email);
+            sendJsonResponse(exchange, 200, new JSONObject().put("matched", true).put("message", "OTP Sent").toString());
+        } else {
+            sendJsonResponse(exchange, 200, new JSONObject().put("matched", false).put("message", "Invalid Details").toString());
+        }
     }
 
-    /* ================= CHANGE PASSWORD (UNCHANGED) ================= */
+    private void triggerPasswordResetOtp(String email) throws Exception {
+        String otp = String.valueOf(new Random().nextInt(900000) + 100000);
+        Timestamp expiry = new Timestamp(System.currentTimeMillis() + (2 * 60 * 1000)); // 2 Mins
+
+        try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+            String query = """
+                INSERT INTO email_verification_otp (email, otp_code, otp_expiry, attempts)
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT (email) DO UPDATE SET
+                otp_code = EXCLUDED.otp_code,
+                otp_expiry = EXCLUDED.otp_expiry,
+                attempts = email_verification_otp.attempts + 1
+            """;
+            try (PreparedStatement stmt = conn.prepareStatement(query)) {
+                stmt.setString(1, email);
+                stmt.setString(2, otp);
+                stmt.setTimestamp(3, expiry);
+                stmt.executeUpdate();
+            }
+        }
+
+        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+        emailService.sendEmail(email, "Password Reset OTP", "Your OTP for password reset is: " + otp);
+    }
+
+    /* ================= CHANGE PASSWORD ================= */
 
     private void handleChangePassword(HttpExchange exchange, JSONObject json) throws Exception {
-
         String email = json.getString("email").trim().toLowerCase();
         String newPassword = json.getString("newPassword");
-
         String hashedPassword = PasswordUtil.hashPassword(newPassword);
-
-        int updated;
+        int updated = 0;
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
-
-            String sql = """
-                UPDATE user_info
-                SET password = ?
-                WHERE user_email = ?
-                  AND status = 'Active'
-            """;
-
+            String sql = "UPDATE user_info SET password = ? WHERE user_email = ? AND status = 'Active'";
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, hashedPassword);
                 ps.setString(2, email);
                 updated = ps.executeUpdate();
             }
+
+            if (updated > 0) {
+                // Cleanup OTP
+                try (Connection otpConn = dbConfig.getPartnerDataSource().getConnection()) {
+                    String deleteOtp = "DELETE FROM email_verification_otp WHERE LOWER(email) = ?";
+                    try (PreparedStatement deleteStmt = otpConn.prepareStatement(deleteOtp)) {
+                        deleteStmt.setString(1, email);
+                        deleteStmt.executeUpdate();
+                    }
+                }
+
+                // Async Notification Email
+                new Thread(() -> {
+                    try {
+                        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                        emailService.sendEmail(email, "Security Alert: Password Changed", "Your password was successfully updated.");
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }).start();
+            }
         }
 
-        sendJsonResponse(exchange, 200,
-                new JSONObject().put("success", updated > 0).toString());
+        sendJsonResponse(exchange, 200, new JSONObject().put("success", updated > 0).toString());
     }
 
     /* ================= UTIL METHODS ================= */
 
     private String normalizeMobile(String mobile) {
         if (mobile == null) return "";
-
-        // Remove +, -, spaces
         mobile = mobile.replaceAll("[^0-9]", "");
-
-        // Remove country code if present (91)
-        if (mobile.length() > 10) {
-            mobile = mobile.substring(mobile.length() - 10);
-        }
-
+        if (mobile.length() > 10) mobile = mobile.substring(mobile.length() - 10);
         return mobile;
     }
 
     private String readRequestBody(HttpExchange exchange) throws IOException {
         StringBuilder sb = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
             String line;
-            while ((line = reader.readLine()) != null) {
-                sb.append(line);
-            }
+            while ((line = reader.readLine()) != null) sb.append(line);
         }
         return sb.toString();
     }
 
-    private void sendJsonResponse(HttpExchange exchange, int status, String response)
-            throws IOException {
-
+    private void sendJsonResponse(HttpExchange exchange, int status, String response) throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
         byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(status, bytes.length);
-
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
