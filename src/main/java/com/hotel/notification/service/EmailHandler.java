@@ -23,7 +23,7 @@ public class EmailHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // CORS Headers
+        // 1. CORS Headers
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -58,7 +58,7 @@ public class EmailHandler implements HttpHandler {
                 handleSendOtp(exchange, email, "Reset Your Password", "You requested to reset your password. Your OTP is: ");
             } 
             else if ("verify_otp".equals(type)) {
-                // Ensure OTP is trimmed of any accidental spaces from the request
+                // Trim user input to remove accidental leading/trailing spaces
                 String otp = body.getOrDefault("otp", "").trim();
                 handleVerifyOtp(exchange, email, otp);
             } 
@@ -75,7 +75,7 @@ public class EmailHandler implements HttpHandler {
         String query = "SELECT 1 FROM user_info WHERE LOWER(user_email) = ?";
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
              PreparedStatement pstmt = conn.prepareStatement(query)) {
-            pstmt.setString(1, email);
+            pstmt.setString(1, email.toLowerCase());
             try (ResultSet rs = pstmt.executeQuery()) {
                 return rs.next();
             }
@@ -87,8 +87,6 @@ public class EmailHandler implements HttpHandler {
         Timestamp expiry = new Timestamp(System.currentTimeMillis() + (2 * 60 * 1000)); 
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-            // Use LOWER(email) for conflict target if your index is functional, 
-            // or ensure email is always lowered (which it is here).
             String query = "INSERT INTO email_verification_otp (email, otp_code, otp_expiry, attempts) " +
                            "VALUES (?, ?, ?, 1) " +
                            "ON CONFLICT (email) DO UPDATE SET " +
@@ -97,7 +95,7 @@ public class EmailHandler implements HttpHandler {
                            "attempts = email_verification_otp.attempts + 1";
 
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
-                stmt.setString(1, email);
+                stmt.setString(1, email.toLowerCase());
                 stmt.setString(2, otp);
                 stmt.setTimestamp(3, expiry);
                 stmt.executeUpdate();
@@ -113,24 +111,26 @@ public class EmailHandler implements HttpHandler {
 
     private void handleVerifyOtp(HttpExchange exchange, String email, String userOtp) throws Exception {
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-            // FIX: Use LOWER(email) to ensure we find the record regardless of case mismatches
+            // FIX: Ensure lookup is case-insensitive
             String query = "SELECT otp_code, otp_expiry, attempts FROM email_verification_otp WHERE LOWER(email) = ?";
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
                 stmt.setString(1, email.toLowerCase());
                 try (ResultSet rs = stmt.executeQuery()) {
                     if (rs.next()) {
+                        // CRITICAL FIX: Trim the stored code from DB to avoid CHAR padding issues
                         String storedOtp = rs.getString("otp_code").trim();
                         Timestamp expiry = rs.getTimestamp("otp_expiry");
                         int attempts = rs.getInt("attempts");
 
-                        if (attempts > 3) {
-                            sendResponse(exchange, 429, "{\"status\":\"error\",\"message\":\"Max attempts reached for today.\"}");
+                        if (attempts > 10) { // Limit attempts for security
+                            sendResponse(exchange, 429, "{\"status\":\"error\",\"message\":\"Max attempts reached.\"}");
                         } else if (expiry.before(new Timestamp(System.currentTimeMillis()))) {
                             sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"OTP expired\"}");
                         } else if (storedOtp.equals(userOtp)) {
+                            // SUCCESS
                             sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP verified\"}");
                         } else {
-                            // If it reaches here, the values truly don't match
+                            // LOGIC reached: Data in DB and Input truly don't match
                             sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Enter Wrong OTP Please try again.\"}");
                         }
                     } else {
