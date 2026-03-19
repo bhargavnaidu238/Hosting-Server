@@ -2,7 +2,7 @@ package com.hotel.app;
 
 import com.hotel.security.PasswordUtil;
 import com.hotel.utilities.DbConfig;
-import com.hotel.notification.service.EmailService; // Ensure this import exists
+import com.hotel.notification.service.EmailService;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import org.json.JSONObject;
@@ -37,8 +37,8 @@ public class RegisterHandler implements HttpHandler {
 
             JSONObject json = new JSONObject(body);
             String email = json.getString("email").toLowerCase().trim();
-            String firstName = json.optString("firstName", "User");
-            String lastName = json.optString("lastName", "");
+            String firstName = json.optString("firstName", "User").trim();
+            String lastName = json.optString("lastName", "").trim();
             String gender = json.optString("gender", null);
             String mobile = json.optString("mobile", null);
             String address = json.optString("address", null);
@@ -53,19 +53,20 @@ public class RegisterHandler implements HttpHandler {
             String hashedPassword = PasswordUtil.hashPassword(rawPassword);
             String finalUserId;
 
+            // 1. PRIMARY TRANSACTION (Customer Data)
             try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
                 conn.setAutoCommit(false);
 
-                // 1. Check if email exists
+                // Check email exists
                 try (PreparedStatement ps = conn.prepareStatement("SELECT 1 FROM user_info WHERE LOWER(user_email) = ?")) {
                     ps.setString(1, email);
                     if (ps.executeQuery().next()) {
-                        sendResponse(exchange, 409, "Email already exists"); // Use 409 Conflict
+                        sendResponse(exchange, 409, "Email already exists");
                         return;
                     }
                 }
 
-                // 2. Generate user_id
+                // Generate user_id
                 String newUserId = "CR9087601";
                 String idSql = "SELECT user_id FROM user_info ORDER BY user_id DESC LIMIT 1";
                 try (Statement stmt = conn.createStatement();
@@ -78,7 +79,7 @@ public class RegisterHandler implements HttpHandler {
                 }
                 finalUserId = newUserId;
 
-                // 3. Insert user
+                // Insert user
                 String insertSql = """
                     INSERT INTO user_info 
                     (user_id, user_email, password, first_name, last_name, 
@@ -99,7 +100,7 @@ public class RegisterHandler implements HttpHandler {
                     ps.executeUpdate();
                 }
 
-                // 4. Create wallet
+                // Create wallet
                 String walletSql = "INSERT INTO wallets (wallet_id, user_id, balance, status) VALUES (?, ?, ?, ?)";
                 try (PreparedStatement ps = conn.prepareStatement(walletSql)) {
                     ps.setString(1, UUID.randomUUID().toString());
@@ -109,29 +110,35 @@ public class RegisterHandler implements HttpHandler {
                     ps.executeUpdate();
                 }
 
-                /* ===============================
-                 * 5. CLEANUP OTP Record
-                 * =============================== */
-                // Note: Using PartnerDataSource if OTP table is there, otherwise CustomerDataSource
-                try (Connection otpConn = dbConfig.getPartnerDataSource().getConnection()) {
-                    String deleteOtp = "DELETE FROM email_verification_otp WHERE LOWER(email) = ?";
-                    try (PreparedStatement deleteStmt = otpConn.prepareStatement(deleteOtp)) {
-                        deleteStmt.setString(1, email);
-                        deleteStmt.executeUpdate();
-                    }
-                }
-
                 conn.commit();
             }
 
             /* ===============================
-             * 6. ASYNC WELCOME EMAIL
+             * 2. CLEANUP OTP Record (Separate Connection)
              * =============================== */
+            try (Connection otpConn = dbConfig.getPartnerDataSource().getConnection()) {
+                String deleteOtp = "DELETE FROM email_verification_otp WHERE LOWER(email) = ?";
+                try (PreparedStatement deleteStmt = otpConn.prepareStatement(deleteOtp)) {
+                    deleteStmt.setString(1, email);
+                    deleteStmt.executeUpdate();
+                }
+            } catch (SQLException e) {
+                // We don't block registration if OTP deletion fails
+                System.err.println("OTP Cleanup Warning: " + e.getMessage());
+            }
+
+            /* ===============================
+             * 3. ASYNC WELCOME EMAIL
+             * =============================== */
+            String fullName = (firstName + " " + lastName).trim();
             new Thread(() -> {
                 try {
                     EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
                     String subject = "Welcome to Hotel Booking";
-                    String welcomeBody = "Hello " + firstName + " " + lastName + ",\n\nYour registration is successful.\nYour User ID: " + finalUserId + "\n\nRegards,\nTeam Hotel Booking";
+                    String welcomeBody = "Hello " + fullName + ",\n\n" +
+                                        "Your registration is successful.\n" +
+                                        "Your User ID: " + finalUserId + "\n\n" +
+                                        "Regards,\nTeam Hotel Booking";
                     emailService.sendEmail(email, subject, welcomeBody);
                 } catch (Exception e) {
                     System.err.println("Async Welcome Email Failed: " + e.getMessage());
@@ -147,6 +154,7 @@ public class RegisterHandler implements HttpHandler {
     }
 
     private void sendResponse(HttpExchange exchange, int code, String msg) throws IOException {
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=UTF-8");
         byte[] bytes = msg.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(code, bytes.length);

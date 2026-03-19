@@ -44,7 +44,6 @@ public class EmailHandler implements HttpHandler {
             String email = body.getOrDefault("email", "").trim().toLowerCase();
 
             if ("send_otp".equals(type)) {
-                // Check if user already exists in user_info table
                 if (checkUserExists(email)) {
                     sendResponse(exchange, 409, "{\"status\":\"error\",\"message\":\"Email already exists. Please login.\"}");
                     return;
@@ -59,7 +58,9 @@ public class EmailHandler implements HttpHandler {
                 handleSendOtp(exchange, email, "Reset Your Password", "You requested to reset your password. Your OTP is: ");
             } 
             else if ("verify_otp".equals(type)) {
-                handleVerifyOtp(exchange, email, body.getOrDefault("otp", ""));
+                // Ensure OTP is trimmed of any accidental spaces from the request
+                String otp = body.getOrDefault("otp", "").trim();
+                handleVerifyOtp(exchange, email, otp);
             } 
             else {
                 sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Invalid type\"}");
@@ -71,7 +72,6 @@ public class EmailHandler implements HttpHandler {
     }
 
     private boolean checkUserExists(String email) throws SQLException {
-        // Pointing to user_info as used in RegisterHandler
         String query = "SELECT 1 FROM user_info WHERE LOWER(user_email) = ?";
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
              PreparedStatement pstmt = conn.prepareStatement(query)) {
@@ -84,10 +84,11 @@ public class EmailHandler implements HttpHandler {
 
     private void handleSendOtp(HttpExchange exchange, String email, String subject, String prefix) throws Exception {
         String otp = String.valueOf(new Random().nextInt(900000) + 100000);
-        // Updated to 2 mins expiry as per Flutter requirement
         Timestamp expiry = new Timestamp(System.currentTimeMillis() + (2 * 60 * 1000)); 
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+            // Use LOWER(email) for conflict target if your index is functional, 
+            // or ensure email is always lowered (which it is here).
             String query = "INSERT INTO email_verification_otp (email, otp_code, otp_expiry, attempts) " +
                            "VALUES (?, ?, ?, 1) " +
                            "ON CONFLICT (email) DO UPDATE SET " +
@@ -112,12 +113,13 @@ public class EmailHandler implements HttpHandler {
 
     private void handleVerifyOtp(HttpExchange exchange, String email, String userOtp) throws Exception {
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-            String query = "SELECT otp_code, otp_expiry, attempts FROM email_verification_otp WHERE email = ?";
+            // FIX: Use LOWER(email) to ensure we find the record regardless of case mismatches
+            String query = "SELECT otp_code, otp_expiry, attempts FROM email_verification_otp WHERE LOWER(email) = ?";
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
-                stmt.setString(1, email);
+                stmt.setString(1, email.toLowerCase());
                 try (ResultSet rs = stmt.executeQuery()) {
                     if (rs.next()) {
-                        String storedOtp = rs.getString("otp_code");
+                        String storedOtp = rs.getString("otp_code").trim();
                         Timestamp expiry = rs.getTimestamp("otp_expiry");
                         int attempts = rs.getInt("attempts");
 
@@ -128,6 +130,7 @@ public class EmailHandler implements HttpHandler {
                         } else if (storedOtp.equals(userOtp)) {
                             sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP verified\"}");
                         } else {
+                            // If it reaches here, the values truly don't match
                             sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Enter Wrong OTP Please try again.\"}");
                         }
                     } else {
