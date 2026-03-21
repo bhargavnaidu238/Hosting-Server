@@ -200,7 +200,8 @@ public class LoginHandler implements HttpHandler {
                 new Thread(() -> {
                     try {
                         EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
-                        emailService.sendEmail(email, "Security Alert: Password Changed", "Your password for the Hotel Booking App was successfully updated.");
+                        emailService.sendEmail(email, "Security Alert: Password Changed", "Your password for the Hotel Booking App was successfully updated\n\n"
+                        		+ "If not performed by you, Please reach out to Customer Care immediately.");
                     } catch (Exception e) {
                         System.err.println("Async Security Email Failed: " + e.getMessage());
                     }

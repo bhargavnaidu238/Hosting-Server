@@ -1,6 +1,7 @@
 package com.hotel.app;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hotel.notification.service.EmailService;
 import com.hotel.utilities.DbConfig;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -62,6 +63,7 @@ public class BookingHandler implements HttpHandler {
         boolean isPgMode = data.containsKey("selected_room_type") || data.containsKey("monthly_price");
         String bookingId = generateBookingId();
         String userId = str(data.get("user_id"));
+        String partnerId = str(data.get("partner_id"));
 
         // Price Normalization
         double originalAmount = toDouble(data.getOrDefault("total_price", data.get("original_total_price")));
@@ -69,7 +71,7 @@ public class BookingHandler implements HttpHandler {
         double amountPaidOnline = toDouble(data.get("amount_paid_online"));
         double dueAtHotel = toDouble(data.get("due_amount_at_hotel"));
 
-        // Status Normalization (MUST be Uppercase for PostgreSQL Enum)
+        // Status Normalization
         String paymentStatus = normalizePaymentStatus(str(data.get("payment_status")));
         String bookingStatus = str(data.getOrDefault("booking_status", "PENDING")).toUpperCase();
 
@@ -90,7 +92,6 @@ public class BookingHandler implements HttpHandler {
             conn = dbConfig.getCustomerDataSource().getConnection();
             conn.setAutoCommit(false);
 
-            // Logic: Apply Wallet/Coupon only if not paying at hotel
             if (!"Offline".equalsIgnoreCase(str(data.get("payment_method_type")))) {
                 if (walletUsedFlag && walletRequested > 0 && !userId.isBlank()) {
                     actualWalletDebited = handleWalletUsage(conn, userId, bookingId, walletRequested, originalAmount);
@@ -116,7 +117,7 @@ public class BookingHandler implements HttpHandler {
                 """;
 
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, str(data.get("partner_id")));
+                ps.setString(1, partnerId);
                 ps.setString(2, str(data.get("hotel_id")));
                 ps.setString(3, bookingId);
                 ps.setString(4, str(data.get("hotel_name")));
@@ -126,8 +127,6 @@ public class BookingHandler implements HttpHandler {
                 ps.setString(8, userId);
                 ps.setDate(9, parseSqlDate(data.get("check_in_date")));
                 ps.setDate(10, parseSqlDate(data.get("check_out_date")));
-
-                // Room Details Logic
                 ps.setInt(11, toInt(data.getOrDefault("guest_count", data.get("Persons"))));
                 ps.setInt(12, toInt(data.getOrDefault("adults", data.get("Persons"))));
                 ps.setInt(13, toInt(data.getOrDefault("children", 0)));
@@ -142,7 +141,7 @@ public class BookingHandler implements HttpHandler {
                 ps.setDouble(22, dueAtHotel);
                 ps.setString(23, str(data.get("payment_method_type")));
                 ps.setString(24, str(data.get("paid_via")));
-                ps.setString(25, paymentStatus); // PAID or PENDING
+                ps.setString(25, paymentStatus);
                 ps.setString(26, str(data.get("transaction_id")));
                 ps.setString(27, actualWalletDebited > 0 ? "Yes" : "No");
                 ps.setDouble(28, actualWalletDebited);
@@ -160,6 +159,58 @@ public class BookingHandler implements HttpHandler {
             }
 
             conn.commit();
+
+            /* =======================================================
+             * ASYNC EMAIL NOTIFICATIONS (CUSTOMER & PARTNER)
+             * ======================================================= */
+            final Map<String, Object> emailData = data;
+            final String finalBookingId = bookingId;
+            final String finalPartnerId = partnerId;
+
+            new Thread(() -> {
+                try {
+                    EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                    
+                    // 1. Notify Customer
+                    String customerEmail = str(emailData.get("email"));
+                    String customerSubject = "Booking Confirmed - " + emailData.get("hotel_name");
+                    String customerBody = String.format(
+                        "Hello %s,\n\nYour booking is confirmed!\n\nBooking ID: %s\nHotel: %s\nAddress: %s\nCheck-in: %s\nCheck-out: %s\nAmount Paid Online: ₹%.2f\nAmount Due at Hotel: ₹%.2f\n\nThank you for choosing us!",
+                        emailData.get("guest_name"), finalBookingId, emailData.get("hotel_name"), emailData.get("hotel_address"),
+                        emailData.get("check_in_date"), emailData.get("check_out_date"), amountPaidOnline, dueAtHotel
+                    );
+                    emailService.sendEmail(customerEmail, customerSubject, customerBody);
+
+                    // 2. Notify Partner (Fetched from partner_data table)
+                    String partnerEmail = "";
+                    String partnerName = "Partner";
+                    
+                    try (Connection partnerConn = dbConfig.getPartnerDataSource().getConnection();
+                         PreparedStatement pps = partnerConn.prepareStatement("SELECT email, partner_name FROM partner_data WHERE partner_id = ?")) {
+                        pps.setString(1, finalPartnerId);
+                        try (ResultSet prs = pps.executeQuery()) {
+                            if (prs.next()) {
+                                partnerEmail = prs.getString("email");
+                                partnerName = prs.getString("partner_name");
+                            }
+                        }
+                    }
+
+                    if (partnerEmail != null && !partnerEmail.isEmpty()) {
+                        String partnerSubject = "New Booking Received - ID: " + finalBookingId;
+                        String partnerBody = String.format(
+                            "Hello %s,\n\nYou have received a new booking for your property: %s.\n\nBooking Details:\n- Booking ID: %s\n- Guest Name: %s\n- Dates: %s to %s\n- Room Type: %s\n- Total Payable Amount: ₹%.2f\n\nPlease log in to your partner dashboard to manage this booking.",
+                            partnerName, emailData.get("hotel_name"), finalBookingId, emailData.get("guest_name"), 
+                            emailData.get("check_in_date"), emailData.get("check_out_date"),
+                            emailData.getOrDefault("room_type", emailData.get("selected_room_type")), finalAmount
+                        );
+                        emailService.sendEmail(partnerEmail, partnerSubject, partnerBody);
+                    }
+                } catch (Exception ex) {
+                    System.err.println("[Async Notification] Failed to send booking emails: " + ex.getMessage());
+                }
+            }).start();
+
             sendResponse(exchange, 200, json("message", "Success", "booking_id", bookingId));
 
         } catch (Exception e) {
@@ -184,7 +235,7 @@ public class BookingHandler implements HttpHandler {
                 balance = rs.getDouble("balance");
             }
         }
-        if (wId == null || balance < finalReq) return 0; // Guard against insufficient balance
+        if (wId == null || balance < finalReq) return 0;
         
         try (PreparedStatement ps = conn.prepareStatement("UPDATE wallets SET balance = balance - ? WHERE wallet_id = ?")) {
             ps.setDouble(1, finalReq);
