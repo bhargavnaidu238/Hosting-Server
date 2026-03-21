@@ -161,53 +161,72 @@ public class BookingHandler implements HttpHandler {
             conn.commit();
 
             /* =======================================================
-             * ASYNC EMAIL NOTIFICATIONS (CUSTOMER & PARTNER)
+             * ASYNC NOTIFICATIONS - Fixed for Partner Email trigger
              * ======================================================= */
-            final Map<String, Object> emailData = data;
-            final String finalBookingId = bookingId;
-            final String finalPartnerId = partnerId;
+            // Capture all data into local final variables to ensure availability in thread
+            final String fCustEmail = str(data.get("email"));
+            final String fGuestName = str(data.get("guest_name"));
+            final String fHotelName = str(data.get("hotel_name"));
+            final String fHotelAddr = str(data.get("hotel_address"));
+            final String fCheckIn = str(data.get("check_in_date"));
+            final String fCheckOut = str(data.get("check_out_date"));
+            final String fRoomType = str(data.getOrDefault("room_type", data.get("selected_room_type")));
+            final double fPaidOnline = amountPaidOnline;
+            final double fDueHotel = dueAtHotel;
+            final double fTotal = finalAmount;
+            final String fPartnerId = partnerId;
+            final String fBookingId = bookingId;
 
             new Thread(() -> {
                 try {
                     EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
                     
                     // 1. Notify Customer
-                    String customerEmail = str(emailData.get("email"));
-                    String customerSubject = "Booking Confirmed - " + emailData.get("hotel_name");
+                    String customerSubject = "Booking Confirmed - " + fHotelName;
                     String customerBody = String.format(
                         "Hello %s,\n\nYour booking is confirmed!\n\nBooking ID: %s\nHotel: %s\nAddress: %s\nCheck-in: %s\nCheck-out: %s\nAmount Paid Online: ₹%.2f\nAmount Due at Hotel: ₹%.2f\n\nThank you for choosing us!",
-                        emailData.get("guest_name"), finalBookingId, emailData.get("hotel_name"), emailData.get("hotel_address"),
-                        emailData.get("check_in_date"), emailData.get("check_out_date"), amountPaidOnline, dueAtHotel
+                        fGuestName, fBookingId, fHotelName, fHotelAddr, fCheckIn, fCheckOut, fPaidOnline, fDueHotel
                     );
-                    emailService.sendEmail(customerEmail, customerSubject, customerBody);
+                    emailService.sendEmail(fCustEmail, customerSubject, customerBody);
 
-                    // 2. Notify Partner (Fetched from partner_data table)
-                    String partnerEmail = "";
+                    // 2. Notify Partner - Fetch email carefully from partner_data
+                    String partnerEmail = null;
                     String partnerName = "Partner";
                     
-                    try (Connection partnerConn = dbConfig.getPartnerDataSource().getConnection();
-                         PreparedStatement pps = partnerConn.prepareStatement("SELECT email, partner_name FROM partner_data WHERE partner_id = ?")) {
-                        pps.setString(1, finalPartnerId);
-                        try (ResultSet prs = pps.executeQuery()) {
-                            if (prs.next()) {
-                                partnerEmail = prs.getString("email");
-                                partnerName = prs.getString("partner_name");
+                    try (Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()) {
+                        String partnerQuery = "SELECT email, partner_name FROM partner_data WHERE partner_id = ?";
+                        try (PreparedStatement pps = partnerConn.prepareStatement(partnerQuery)) {
+                            pps.setString(1, fPartnerId);
+                            try (ResultSet prs = pps.executeQuery()) {
+                                if (prs.next()) {
+                                    partnerEmail = prs.getString("email");
+                                    partnerName = prs.getString("partner_name");
+                                }
                             }
                         }
                     }
 
-                    if (partnerEmail != null && !partnerEmail.isEmpty()) {
-                        String partnerSubject = "New Booking Received - ID: " + finalBookingId;
+                    if (partnerEmail != null && !partnerEmail.trim().isEmpty()) {
+                        String partnerSubject = "Action Required: New Booking Received - " + fBookingId;
                         String partnerBody = String.format(
-                            "Hello %s,\n\nYou have received a new booking for your property: %s.\n\nBooking Details:\n- Booking ID: %s\n- Guest Name: %s\n- Dates: %s to %s\n- Room Type: %s\n- Total Payable Amount: ₹%.2f\n\nPlease log in to your partner dashboard to manage this booking.",
-                            partnerName, emailData.get("hotel_name"), finalBookingId, emailData.get("guest_name"), 
-                            emailData.get("check_in_date"), emailData.get("check_out_date"),
-                            emailData.getOrDefault("room_type", emailData.get("selected_room_type")), finalAmount
+                            "Hello %s,\n\nYou have received a new booking for property: %s.\n\n" +
+                            "Booking Details:\n" +
+                            "- Booking ID: %s\n" +
+                            "- Guest Name: %s\n" +
+                            "- Dates: %s to %s\n" +
+                            "- Room Type: %s\n" +
+                            "- Total Amount: ₹%.2f\n\n" +
+                            "Please take required action from your dashboard.",
+                            partnerName, fHotelName, fBookingId, fGuestName, fCheckIn, fCheckOut, fRoomType, fTotal
                         );
                         emailService.sendEmail(partnerEmail, partnerSubject, partnerBody);
+                        System.out.println("[EmailLog] Partner Email triggered to: " + partnerEmail);
+                    } else {
+                        System.err.println("[EmailLog] Partner ID " + fPartnerId + " not found in partner_data.");
                     }
                 } catch (Exception ex) {
-                    System.err.println("[Async Notification] Failed to send booking emails: " + ex.getMessage());
+                    System.err.println("[EmailLog] Error sending booking emails: " + ex.getMessage());
+                    ex.printStackTrace();
                 }
             }).start();
 
