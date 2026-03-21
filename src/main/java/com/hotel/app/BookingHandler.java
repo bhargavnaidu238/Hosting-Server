@@ -88,6 +88,25 @@ public class BookingHandler implements HttpHandler {
         double actualWalletDebited = 0;
         Connection conn = null;
 
+        // --- NEW: PRE-FETCH PARTNER DETAILS BEFORE TRANSACTION ---
+        String partnerEmailForMail = null;
+        String partnerNameForMail = "Partner";
+
+        try (Connection partnerLookupConn = dbConfig.getPartnerDataSource().getConnection()) {
+            String lookupSql = "SELECT email, partner_name FROM partner_data WHERE partner_id = ?";
+            try (PreparedStatement lps = partnerLookupConn.prepareStatement(lookupSql)) {
+                lps.setString(1, partnerId);
+                try (ResultSet lrs = lps.executeQuery()) {
+                    if (lrs.next()) {
+                        partnerEmailForMail = lrs.getString("email");
+                        partnerNameForMail = lrs.getString("partner_name");
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("[Critical] Could not pre-fetch partner details: " + e.getMessage());
+        }
+
         try {
             conn = dbConfig.getCustomerDataSource().getConnection();
             conn.setAutoCommit(false);
@@ -160,10 +179,9 @@ public class BookingHandler implements HttpHandler {
 
             conn.commit();
 
-            /* =======================================================
-             * ASYNC NOTIFICATIONS - Fixed for Partner Email trigger
-             * ======================================================= */
-            // Capture all data into local final variables to ensure availability in thread
+            // --- ASYNC NOTIFICATIONS ---
+            final String finalPartnerEmail = partnerEmailForMail;
+            final String finalPartnerName = partnerNameForMail;
             final String fCustEmail = str(data.get("email"));
             final String fGuestName = str(data.get("guest_name"));
             final String fHotelName = str(data.get("hotel_name"));
@@ -174,7 +192,6 @@ public class BookingHandler implements HttpHandler {
             final double fPaidOnline = amountPaidOnline;
             final double fDueHotel = dueAtHotel;
             final double fTotal = finalAmount;
-            final String fPartnerId = partnerId;
             final String fBookingId = bookingId;
 
             new Thread(() -> {
@@ -184,30 +201,14 @@ public class BookingHandler implements HttpHandler {
                     // 1. Notify Customer
                     String customerSubject = "Booking Confirmed - " + fHotelName;
                     String customerBody = String.format(
-                        "Hello %s,\n\nYour booking is confirmed!\n\nBooking ID: %s\nHotel: %s\nAddress: %s\nCheck-in: %s\nCheck-out: %s\nAmount Paid Online: ₹%.2f\nAmount Due at Hotel: ₹%.2f\n\nThank you for choosing us!",
+                        "Hello %s,\n\nYour booking is confirmed!\n\nBooking ID: %s\nHotel: %s\nAddress: %s\nCheck-in: %s\nCheck-out: %s\nAmount Paid Online: ₹%.2f\nAmount Due at Hotel: ₹%.2f\n\nRegards,\nHotel Booking Team",
                         fGuestName, fBookingId, fHotelName, fHotelAddr, fCheckIn, fCheckOut, fPaidOnline, fDueHotel
                     );
                     emailService.sendEmail(fCustEmail, customerSubject, customerBody);
 
-                    // 2. Notify Partner - Fetch email carefully from partner_data
-                    String partnerEmail = null;
-                    String partnerName = "Partner";
-                    
-                    try (Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()) {
-                        String partnerQuery = "SELECT email, partner_name FROM partner_data WHERE partner_id = ?";
-                        try (PreparedStatement pps = partnerConn.prepareStatement(partnerQuery)) {
-                            pps.setString(1, fPartnerId);
-                            try (ResultSet prs = pps.executeQuery()) {
-                                if (prs.next()) {
-                                    partnerEmail = prs.getString("email");
-                                    partnerName = prs.getString("partner_name");
-                                }
-                            }
-                        }
-                    }
-
-                    if (partnerEmail != null && !partnerEmail.trim().isEmpty()) {
-                        String partnerSubject = "Action Required: New Booking Received - " + fBookingId;
+                    // 2. Notify Partner (Already fetched details)
+                    if (finalPartnerEmail != null && !finalPartnerEmail.isEmpty()) {
+                        String partnerSubject = "Action Required: New Booking - " + fBookingId;
                         String partnerBody = String.format(
                             "Hello %s,\n\nYou have received a new booking for property: %s.\n\n" +
                             "Booking Details:\n" +
@@ -216,17 +217,15 @@ public class BookingHandler implements HttpHandler {
                             "- Dates: %s to %s\n" +
                             "- Room Type: %s\n" +
                             "- Total Amount: ₹%.2f\n\n" +
-                            "Please take required action from your dashboard.",
-                            partnerName, fHotelName, fBookingId, fGuestName, fCheckIn, fCheckOut, fRoomType, fTotal
+                            "Please manage this from your partner dashboard.",
+                            finalPartnerName, fHotelName, fBookingId, fGuestName, fCheckIn, fCheckOut, fRoomType, fTotal
                         );
-                        emailService.sendEmail(partnerEmail, partnerSubject, partnerBody);
-                        System.out.println("[EmailLog] Partner Email triggered to: " + partnerEmail);
+                        emailService.sendEmail(finalPartnerEmail, partnerSubject, partnerBody);
                     } else {
-                        System.err.println("[EmailLog] Partner ID " + fPartnerId + " not found in partner_data.");
+                        System.err.println("[EmailService] Skipping partner email: Partner email is null/empty.");
                     }
                 } catch (Exception ex) {
-                    System.err.println("[EmailLog] Error sending booking emails: " + ex.getMessage());
-                    ex.printStackTrace();
+                    System.err.println("[Async Error] Email Notification Failure: " + ex.getMessage());
                 }
             }).start();
 
