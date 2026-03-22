@@ -203,7 +203,10 @@ public class WebBookingHandler implements HttpHandler {
                         success = updateStmt.executeUpdate() > 0;
                         if (success) {
                             message = "Status updated successfully";
-                            triggerBookingNotification(bookingId, newStatus);
+                            // Notify both parties on important status changes
+                            if ("CONFIRMED".equals(newStatus) || "CANCELLED".equals(newStatus)) {
+                                triggerBookingNotification(bookingId, newStatus);
+                            }
                         } else {
                             message = "Update failed";
                         }
@@ -228,11 +231,11 @@ public class WebBookingHandler implements HttpHandler {
             try (Connection customerConn = dbConfig.getCustomerDataSource().getConnection();
                  Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()) {
 
-                // 1. Fetch Booking Details
-                String bookingSql = "SELECT partner_id, guest_name, check_in_date, check_out_date, room_type, amount_paid_online " +
+                // 1. Fetch Booking and Customer Details
+                String bookingSql = "SELECT partner_id, guest_name, email, check_in_date, check_out_date, room_type, amount_paid_online, hotel_name " +
                                   "FROM bookings_info WHERE booking_id = ?";
                 
-                String partnerId = "", gName = "", cin = "", cout = "", rType = "", amt = "";
+                String partnerId = "", gName = "", cEmail = "", cin = "", cout = "", rType = "", amt = "", hName = "";
 
                 try (PreparedStatement ps = customerConn.prepareStatement(bookingSql)) {
                     ps.setString(1, bookingId);
@@ -240,49 +243,69 @@ public class WebBookingHandler implements HttpHandler {
                     if (rs.next()) {
                         partnerId = rs.getString("partner_id");
                         gName = rs.getString("guest_name");
+                        cEmail = rs.getString("email");
                         cin = rs.getString("check_in_date");
                         cout = rs.getString("check_out_date");
                         rType = rs.getString("room_type");
                         amt = rs.getString("amount_paid_online");
+                        hName = rs.getString("hotel_name");
                     }
                 }
 
-                // 2. Fetch Partner Contact Info and Send Email
-                if (partnerId != null && !partnerId.isEmpty()) {
-                    String partnerSql = "SELECT partner_name, email FROM partner_data WHERE partner_id = ?";
-                    try (PreparedStatement ps2 = partnerConn.prepareStatement(partnerSql)) {
-                        ps2.setString(1, partnerId);
-                        ResultSet rs2 = ps2.executeQuery();
-                        if (rs2.next()) {
-                            String pName = rs2.getString("partner_name");
-                            String pEmail = rs2.getString("email");
+                if (partnerId == null || partnerId.isEmpty()) return;
 
-                            EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
-                            String subject = "Booking Notification: ID #" + bookingId + " is " + status;
-                            
-                            StringBuilder body = new StringBuilder();
-                            body.append("Hello ").append(pName).append(",\n\n");
-                            body.append("A booking status at your property has been updated to: ").append(status).append("\n\n");
-                            body.append("--- Booking Details ---\n");
-                            body.append("Booking ID: ").append(bookingId).append("\n");
-                            body.append("Guest Name: ").append(gName).append("\n");
-                            body.append("Room Type: ").append(rType).append("\n");
-                            body.append("Check-in: ").append(cin).append("\n");
-                            body.append("Check-out: ").append(cout).append("\n");
-                            body.append("Amount Paid: ₹").append(amt != null ? amt : "0.00").append("\n\n");
-
-                            if ("PENDING".equalsIgnoreCase(status)) {
-                                body.append("ACTION REQUIRED: This booking is currently PENDING. Please verify availability and CONFIRM this booking in the Partner Portal to avoid guest inconvenience.\n\n");
-                            }
-
-                            body.append("Regards,\nHotel Operations Team");
-
-                            emailService.sendEmail(pEmail, subject, body.toString());
-                        }
+                // 2. Fetch Partner Contact Info
+                String pName = "Partner", pEmail = "";
+                String partnerSql = "SELECT partner_name, email FROM partner_data WHERE partner_id = ?";
+                try (PreparedStatement ps2 = partnerConn.prepareStatement(partnerSql)) {
+                    ps2.setString(1, partnerId);
+                    ResultSet rs2 = ps2.executeQuery();
+                    if (rs2.next()) {
+                        pName = rs2.getString("partner_name");
+                        pEmail = rs2.getString("email");
                     }
                 }
+
+                EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                
+                // 3. Prepare Email Content
+                String subject = "Booking Update: ID #" + bookingId + " is " + status;
+                String statusMsg = status.equalsIgnoreCase("CONFIRMED") 
+                    ? "has been successfully CONFIRMED." 
+                    : "has been CANCELLED.";
+
+                StringBuilder bodyTemplate = new StringBuilder();
+                bodyTemplate.append("Booking Status Update\n");
+                bodyTemplate.append("----------------------------\n");
+                bodyTemplate.append("Booking ID: ").append(bookingId).append("\n");
+                bodyTemplate.append("Hotel Name: ").append(hName).append("\n");
+                bodyTemplate.append("Guest Name: ").append(gName).append("\n");
+                bodyTemplate.append("Room Type: ").append(rType).append("\n");
+                bodyTemplate.append("Check-in: ").append(cin).append("\n");
+                bodyTemplate.append("Check-out: ").append(cout).append("\n");
+                bodyTemplate.append("Amount: ₹").append(amt != null ? amt : "0.00").append("\n");
+                bodyTemplate.append("----------------------------\n\n");
+
+                // Send to Partner
+                String partnerBody = "Hello " + pName + ",\n\n" +
+                                   "The status of a booking at your property " + statusMsg + "\n\n" +
+                                   bodyTemplate.toString() +
+                                   "Regards,\nHotel Operations Team";
+                if (pEmail != null && !pEmail.isEmpty()) {
+                    emailService.sendEmail(pEmail, subject, partnerBody);
+                }
+
+                // Send to Customer
+                String customerBody = "Hello " + gName + ",\n\n" +
+                                    "Your booking status at " + hName + " " + statusMsg + "\n\n" +
+                                    bodyTemplate.toString() +
+                                    "We look forward to serving you.\n\nRegards,\n" + hName + " Management";
+                if (cEmail != null && !cEmail.isEmpty()) {
+                    emailService.sendEmail(cEmail, subject, customerBody);
+                }
+
             } catch (Exception e) {
-                System.err.println("[BookingNotificationError] Failed to send email: " + e.getMessage());
+                System.err.println("[BookingNotificationError] Failed to send update emails: " + e.getMessage());
             }
         }).start();
     }
