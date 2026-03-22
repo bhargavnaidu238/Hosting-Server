@@ -11,7 +11,7 @@ import java.util.*;
 
 public class GetPartnerFinanceHandler implements HttpHandler {
 
-	private final DbConfig dbConfig;
+    private final DbConfig dbConfig;
 
     public GetPartnerFinanceHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
@@ -52,15 +52,14 @@ public class GetPartnerFinanceHandler implements HttpHandler {
         partnerId = partnerId.trim();
 
         try {
-            // 1) Fetch partner finance row (BANK + commission + paid/pending etc.)
+            // 1) Fetch partner finance row
             Map<String, Object> partnerMap = fetchPartnerFinanceRow(partnerId);
             if (partnerMap.isEmpty()) {
                 sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Partner not found\"}");
                 return;
             }
 
-            // 2) Commission percentage MUST come from DB (Partner_Finance.Commission_Percentage).
-            //    If DB returns NULL treat as 0.0 (do NOT use any other hard-coded fallback).
+            // 2) Commission percentage from DB
             double commissionPercent = 0.0;
             Object cpObj = partnerMap.get("commission_percentage");
             if (cpObj != null) {
@@ -68,10 +67,10 @@ public class GetPartnerFinanceHandler implements HttpHandler {
                 catch (Exception ignored) { commissionPercent = 0.0; }
             }
 
-            // 3) Fetch bookings for partner and compute totals using commissionPercent
+            // 3) Fetch bookings and compute totals
             BookingAggregation agg = fetchBookingsAndCompute(partnerId, commissionPercent);
 
-            // Recognized totals (only COMPLETED bookings)
+            // Recognized totals (COMPLETED bookings)
             double recognizedRevenue = agg.recognizedRevenue;
             double provisionalRevenue = agg.provisionalRevenue;
 
@@ -81,29 +80,26 @@ public class GetPartnerFinanceHandler implements HttpHandler {
             double paidPayout = toDouble(partnerMap.getOrDefault("paid_payout", 0.0));
             double pendingPayout = Math.max(0.0, netRevenue - paidPayout);
 
+            // 4) UPDATE the Partner_Finance table with fresh calculations
+            updatePartnerFinance(partnerId, recognizedRevenue, netRevenue, pendingPayout);
+
             // 5) Build response
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("status", "success");
             result.put("partner_id", partnerId);
-
-            // Recognized (authoritative) revenue — COMPLETED only
             result.put("total_revenue", df.format(recognizedRevenue));
-            // Provisional (informational) revenue — PENDING + CONFIRMED
             result.put("provisional_revenue", df.format(provisionalRevenue));
-
             result.put("commission_percentage", df.format(commissionPercent));
             result.put("commission_amount", df.format(commissionAmount));
             result.put("net_revenue", df.format(netRevenue));
             result.put("pending_payout", df.format(pendingPayout));
             result.put("paid_payout", df.format(paidPayout));
 
-            // Counts
             result.put("total_bookings", agg.count);
             result.put("completed_bookings", agg.completed);
             result.put("cancelled_bookings", agg.cancelled);
             result.put("provisional_bookings", agg.provisionalCount);
 
-            // Bank details - map DB columns to frontend keys (safe defaults)
             result.put("account_holder_name", partnerMap.getOrDefault("account_holder_name", ""));
             result.put("bank_name", partnerMap.getOrDefault("bank_name", ""));
             result.put("account_number", partnerMap.getOrDefault("account_number", ""));
@@ -112,8 +108,6 @@ public class GetPartnerFinanceHandler implements HttpHandler {
             result.put("pan_tax_id", partnerMap.getOrDefault("pan_tax_id", ""));
             result.put("payout_type", partnerMap.getOrDefault("payout_type", ""));
             result.put("last_payout_date", partnerMap.getOrDefault("last_payout_date", ""));
-
-            // Attach per-booking list (all statuses). Per-booking Commission_Amount/Net_Revenue computed.
             result.put("Bookings", agg.bookings);
 
             sendResponse(exchange, 200, toJson(result));
@@ -124,10 +118,25 @@ public class GetPartnerFinanceHandler implements HttpHandler {
         }
     }
 
-    // Fetch partner finance row from partner_info.Partner_Finance
+    // New method to persist the calculated totals back to the database
+    private void updatePartnerFinance(String partnerId, double totalRev, double netRev, double pendingPayout) throws Exception {
+        String sql = """
+                UPDATE partner_finance 
+                SET total_revenue = ?, net_revenue = ?, pending_payout = ? 
+                WHERE partner_id = ?
+                """;
+        try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setDouble(1, totalRev);
+            ps.setDouble(2, netRev);
+            ps.setDouble(3, pendingPayout);
+            ps.setString(4, partnerId);
+            ps.executeUpdate();
+        }
+    }
+
     private Map<String, Object> fetchPartnerFinanceRow(String partnerId) throws Exception {
         Map<String, Object> map = new LinkedHashMap<>();
-
         String sql = """
                 SELECT partner_id, account_holder_name, bank_name, account_number,
                        ifsc_swift, account_type, pan_tax_id, payout_type,
@@ -139,27 +148,21 @@ public class GetPartnerFinanceHandler implements HttpHandler {
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-
             ps.setString(1, partnerId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return map;
                 ResultSetMetaData md = rs.getMetaData();
                 int cols = md.getColumnCount();
                 for (int i = 1; i <= cols; i++) {
-                    String col = md.getColumnLabel(i);
-                    Object val = rs.getObject(i);
-                    map.put(col, val != null ? val : null);
+                    map.put(md.getColumnLabel(i), rs.getObject(i));
                 }
             }
         }
         return map;
     }
 
-    // Query bookings_info for partner and compute per-booking commission/net and aggregates
     private BookingAggregation fetchBookingsAndCompute(String partnerId, double commissionPercent) throws Exception {
         BookingAggregation agg = new BookingAggregation();
-
-        // Select relevant columns from bookings_info. Include Total_Price (revenue).
         String sql = """
                 SELECT booking_id, hotel_id, hotel_name, hotel_type, guest_name, email, user_id,
                        check_in_date, check_out_date, guest_count, adults, children, total_rooms_booked,
@@ -182,81 +185,60 @@ public class GetPartnerFinanceHandler implements HttpHandler {
 
                 while (rs.next()) {
                     agg.count++;
-
                     double totalPrice = 0.0;
                     try {
                         Object tpObj = rs.getObject("original_amount");
                         if (tpObj != null) totalPrice = Double.parseDouble(tpObj.toString());
-                    } catch (Exception ignored) { totalPrice = 0.0; }
+                    } catch (Exception ignored) {}
 
                     String status = rs.getString("booking_status");
                     if (status != null) {
                         if (status.equalsIgnoreCase("CANCELLED")) agg.cancelled++;
                         else if (status.equalsIgnoreCase("COMPLETED")) {
                             agg.completed++;
-                            // Recognized revenue only from completed bookings
                             agg.recognizedRevenue += totalPrice;
-                        } else if (status.equalsIgnoreCase("PENDING") || status.equalsIgnoreCase("CONFIRMED")) {
-                            agg.provisionalCount++;
-                            agg.provisionalRevenue += totalPrice;
                         } else {
-                            // other statuses treat as provisional (you can refine)
                             agg.provisionalCount++;
                             agg.provisionalRevenue += totalPrice;
                         }
-                    } else {
-                        agg.provisionalCount++;
-                        agg.provisionalRevenue += totalPrice;
                     }
 
                     Map<String, Object> booking = new LinkedHashMap<>();
-                    // add all selected columns to booking map
                     for (int i = 1; i <= colCount; i++) {
-                        String colLabel = md.getColumnLabel(i);
-                        Object val = rs.getObject(i);
-                        booking.put(colLabel, val != null ? val : "");
+                        booking.put(md.getColumnLabel(i), rs.getObject(i) != null ? rs.getObject(i) : "");
                     }
 
-                    // compute commission & net for this booking using commissionPercent from partner table
-                    // We compute per-booking commission/net for visibility; totals only include completed as above.
                     double commissionAmt = totalPrice * commissionPercent / 100.0;
                     double netAmt = totalPrice - commissionAmt;
 
                     booking.put("commission_amount", df.format(commissionAmt));
                     booking.put("net_revenue", df.format(netAmt));
-
                     agg.bookings.add(booking);
                 }
             }
         }
-
         return agg;
     }
 
-    // Helper to extract partner_id from GET query or POST form
     private String extractPartnerId(HttpExchange exchange) throws IOException {
         if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
             String body = readBody(exchange);
-            Map<String, String> map = parseForm(body);
-            return map.get("partner_id");
+            return parseForm(body).get("partner_id");
         } else {
-            Map<String, String> q = queryToMap(exchange.getRequestURI().getQuery());
-            return q.get("partner_id");
+            return queryToMap(exchange.getRequestURI().getQuery()).get("partner_id");
         }
     }
 
-    // Small aggregator class
     private static class BookingAggregation {
-        double recognizedRevenue = 0.0; // sum of completed bookings
-        double provisionalRevenue = 0.0; // sum of pending/confirmed
-        int count = 0; // total bookings returned
+        double recognizedRevenue = 0.0;
+        double provisionalRevenue = 0.0;
+        int count = 0;
         int completed = 0;
         int cancelled = 0;
         int provisionalCount = 0;
         List<Map<String, Object>> bookings = new ArrayList<>();
     }
 
-    // ---------- Helpers ----------
     private String readBody(HttpExchange exchange) throws IOException {
         try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
             StringBuilder sb = new StringBuilder();
@@ -271,11 +253,7 @@ public class GetPartnerFinanceHandler implements HttpHandler {
         if (body == null || body.isEmpty()) return map;
         for (String pair : body.split("&")) {
             String[] kv = pair.split("=", 2);
-            if (kv.length == 2) {
-                String k = URLDecoder.decode(kv[0], "UTF-8");
-                String v = URLDecoder.decode(kv[1], "UTF-8");
-                map.put(k, v);
-            }
+            if (kv.length == 2) map.put(URLDecoder.decode(kv[0], "UTF-8"), URLDecoder.decode(kv[1], "UTF-8"));
         }
         return map;
     }
@@ -285,9 +263,7 @@ public class GetPartnerFinanceHandler implements HttpHandler {
         if (query == null || query.isEmpty()) return map;
         for (String pair : query.split("&")) {
             String[] kv = pair.split("=", 2);
-            if (kv.length == 2) {
-                map.put(URLDecoder.decode(kv[0], "UTF-8"), URLDecoder.decode(kv[1], "UTF-8"));
-            }
+            if (kv.length == 2) map.put(URLDecoder.decode(kv[0], "UTF-8"), URLDecoder.decode(kv[1], "UTF-8"));
         }
         return map;
     }
@@ -299,48 +275,32 @@ public class GetPartnerFinanceHandler implements HttpHandler {
 
     private String escape(String s) {
         if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n","\\n")
-                .replace("\r","\\r")
-                .replace("\t","\\t");
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n","\\n").replace("\r","\\r").replace("\t","\\t");
     }
 
-    // Simple JSON serializer (keeps same style as your original)
     private String toJson(Object obj) {
         if (obj == null) return "null";
         if (obj instanceof Map) {
             StringBuilder sb = new StringBuilder("{");
             Map<?,?> map = (Map<?,?>) obj;
             for (Map.Entry<?,?> e : map.entrySet()) {
-                sb.append("\"").append(escape(String.valueOf(e.getKey()))).append("\":");
-                sb.append(toJson(e.getValue())).append(",");
+                sb.append("\"").append(escape(String.valueOf(e.getKey()))).append("\":").append(toJson(e.getValue())).append(",");
             }
             if (sb.charAt(sb.length()-1)==',') sb.setLength(sb.length()-1);
-            sb.append("}");
-            return sb.toString();
+            return sb.append("}").toString();
         } else if (obj instanceof List) {
             StringBuilder sb = new StringBuilder("[");
-            List<?> list = (List<?>) obj;
-            for (Object o : list) {
-                sb.append(toJson(o)).append(",");
-            }
+            for (Object o : (List<?>) obj) sb.append(toJson(o)).append(",");
             if (sb.charAt(sb.length()-1)==',') sb.setLength(sb.length()-1);
-            sb.append("]");
-            return sb.toString();
-        } else if (obj instanceof Number || obj instanceof Boolean) {
-            return String.valueOf(obj);
-        } else {
-            return "\"" + escape(String.valueOf(obj)) + "\"";
-        }
+            return sb.append("]").toString();
+        } else if (obj instanceof Number || obj instanceof Boolean) return String.valueOf(obj);
+        return "\"" + escape(String.valueOf(obj)) + "\"";
     }
 
     private void sendResponse(HttpExchange exchange, int code, String msg) throws IOException {
         exchange.getResponseHeaders().set("Content-Type","application/json; charset=UTF-8");
         byte[] bytes = msg.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(code, bytes.length);
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(bytes);
-        }
+        try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
     }
 }

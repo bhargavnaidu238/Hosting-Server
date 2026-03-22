@@ -1,6 +1,7 @@
 package com.hotel.app;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hotel.notification.service.EmailService;
 import com.hotel.utilities.DbConfig;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -62,6 +63,7 @@ public class BookingHandler implements HttpHandler {
         boolean isPgMode = data.containsKey("selected_room_type") || data.containsKey("monthly_price");
         String bookingId = generateBookingId();
         String userId = str(data.get("user_id"));
+        String partnerId = str(data.get("partner_id"));
 
         // Price Normalization
         double originalAmount = toDouble(data.getOrDefault("total_price", data.get("original_total_price")));
@@ -69,7 +71,7 @@ public class BookingHandler implements HttpHandler {
         double amountPaidOnline = toDouble(data.get("amount_paid_online"));
         double dueAtHotel = toDouble(data.get("due_amount_at_hotel"));
 
-        // Status Normalization (MUST be Uppercase for PostgreSQL Enum)
+        // Status Normalization
         String paymentStatus = normalizePaymentStatus(str(data.get("payment_status")));
         String bookingStatus = str(data.getOrDefault("booking_status", "PENDING")).toUpperCase();
 
@@ -86,11 +88,29 @@ public class BookingHandler implements HttpHandler {
         double actualWalletDebited = 0;
         Connection conn = null;
 
+        // --- NEW: PRE-FETCH PARTNER DETAILS BEFORE TRANSACTION ---
+        String partnerEmailForMail = null;
+        String partnerNameForMail = "Partner";
+
+        try (Connection partnerLookupConn = dbConfig.getPartnerDataSource().getConnection()) {
+            String lookupSql = "SELECT email, partner_name FROM partner_data WHERE partner_id = ?";
+            try (PreparedStatement lps = partnerLookupConn.prepareStatement(lookupSql)) {
+                lps.setString(1, partnerId);
+                try (ResultSet lrs = lps.executeQuery()) {
+                    if (lrs.next()) {
+                        partnerEmailForMail = lrs.getString("email");
+                        partnerNameForMail = lrs.getString("partner_name");
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("[Critical] Could not pre-fetch partner details: " + e.getMessage());
+        }
+
         try {
             conn = dbConfig.getCustomerDataSource().getConnection();
             conn.setAutoCommit(false);
 
-            // Logic: Apply Wallet/Coupon only if not paying at hotel
             if (!"Offline".equalsIgnoreCase(str(data.get("payment_method_type")))) {
                 if (walletUsedFlag && walletRequested > 0 && !userId.isBlank()) {
                     actualWalletDebited = handleWalletUsage(conn, userId, bookingId, walletRequested, originalAmount);
@@ -116,7 +136,7 @@ public class BookingHandler implements HttpHandler {
                 """;
 
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, str(data.get("partner_id")));
+                ps.setString(1, partnerId);
                 ps.setString(2, str(data.get("hotel_id")));
                 ps.setString(3, bookingId);
                 ps.setString(4, str(data.get("hotel_name")));
@@ -126,8 +146,6 @@ public class BookingHandler implements HttpHandler {
                 ps.setString(8, userId);
                 ps.setDate(9, parseSqlDate(data.get("check_in_date")));
                 ps.setDate(10, parseSqlDate(data.get("check_out_date")));
-
-                // Room Details Logic
                 ps.setInt(11, toInt(data.getOrDefault("guest_count", data.get("Persons"))));
                 ps.setInt(12, toInt(data.getOrDefault("adults", data.get("Persons"))));
                 ps.setInt(13, toInt(data.getOrDefault("children", 0)));
@@ -142,7 +160,7 @@ public class BookingHandler implements HttpHandler {
                 ps.setDouble(22, dueAtHotel);
                 ps.setString(23, str(data.get("payment_method_type")));
                 ps.setString(24, str(data.get("paid_via")));
-                ps.setString(25, paymentStatus); // PAID or PENDING
+                ps.setString(25, paymentStatus);
                 ps.setString(26, str(data.get("transaction_id")));
                 ps.setString(27, actualWalletDebited > 0 ? "Yes" : "No");
                 ps.setDouble(28, actualWalletDebited);
@@ -160,6 +178,57 @@ public class BookingHandler implements HttpHandler {
             }
 
             conn.commit();
+
+            // --- ASYNC NOTIFICATIONS ---
+            final String finalPartnerEmail = partnerEmailForMail;
+            final String finalPartnerName = partnerNameForMail;
+            final String fCustEmail = str(data.get("email"));
+            final String fGuestName = str(data.get("guest_name"));
+            final String fHotelName = str(data.get("hotel_name"));
+            final String fHotelAddr = str(data.get("hotel_address"));
+            final String fCheckIn = str(data.get("check_in_date"));
+            final String fCheckOut = str(data.get("check_out_date"));
+            final String fRoomType = str(data.getOrDefault("room_type", data.get("selected_room_type")));
+            final double fPaidOnline = amountPaidOnline;
+            final double fDueHotel = dueAtHotel;
+            final double fTotal = finalAmount;
+            final String fBookingId = bookingId;
+
+            new Thread(() -> {
+                try {
+                    EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                    
+                    // 1. Notify Customer
+                    String customerSubject = "Booking Confirmed - " + fHotelName;
+                    String customerBody = String.format(
+                        "Hello %s,\n\nYour booking is confirmed!\n\nBooking ID: %s\nHotel: %s\nAddress: %s\nCheck-in: %s\nCheck-out: %s\nAmount Paid Online: ₹%.2f\nAmount Due at Hotel: ₹%.2f\n\nRegards,\nHotel Booking Team",
+                        fGuestName, fBookingId, fHotelName, fHotelAddr, fCheckIn, fCheckOut, fPaidOnline, fDueHotel
+                    );
+                    emailService.sendEmail(fCustEmail, customerSubject, customerBody);
+
+                    // 2. Notify Partner (Already fetched details)
+                    if (finalPartnerEmail != null && !finalPartnerEmail.isEmpty()) {
+                        String partnerSubject = "Action Required: New Booking - " + fBookingId;
+                        String partnerBody = String.format(
+                            "Hello %s,\n\nYou have received a new booking for property: %s.\n\n" +
+                            "Booking Details:\n" +
+                            "- Booking ID: %s\n" +
+                            "- Guest Name: %s\n" +
+                            "- Dates: %s to %s\n" +
+                            "- Room Type: %s\n" +
+                            "- Total Amount: ₹%.2f\n\n" +
+                            "Please manage this from your partner dashboard.",
+                            finalPartnerName, fHotelName, fBookingId, fGuestName, fCheckIn, fCheckOut, fRoomType, fTotal
+                        );
+                        emailService.sendEmail(finalPartnerEmail, partnerSubject, partnerBody);
+                    } else {
+                        System.err.println("[EmailService] Skipping partner email: Partner email is null/empty.");
+                    }
+                } catch (Exception ex) {
+                    System.err.println("[Async Error] Email Notification Failure: " + ex.getMessage());
+                }
+            }).start();
+
             sendResponse(exchange, 200, json("message", "Success", "booking_id", bookingId));
 
         } catch (Exception e) {
@@ -184,7 +253,7 @@ public class BookingHandler implements HttpHandler {
                 balance = rs.getDouble("balance");
             }
         }
-        if (wId == null || balance < finalReq) return 0; // Guard against insufficient balance
+        if (wId == null || balance < finalReq) return 0;
         
         try (PreparedStatement ps = conn.prepareStatement("UPDATE wallets SET balance = balance - ? WHERE wallet_id = ?")) {
             ps.setDouble(1, finalReq);

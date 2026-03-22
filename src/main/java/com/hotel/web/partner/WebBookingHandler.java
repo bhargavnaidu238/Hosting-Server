@@ -4,11 +4,13 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hotel.utilities.DbConfig;
+import com.hotel.notification.service.EmailService;
 
 import java.io.*;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
+import java.sql.Date;
 import java.time.LocalDate;
 import java.util.*;
 
@@ -46,7 +48,7 @@ public class WebBookingHandler implements HttpHandler {
     private void addCORSHeaders(HttpExchange exchange) {
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
     }
 
     private Map<String, String> parsePostBody(HttpExchange exchange) throws IOException {
@@ -84,7 +86,7 @@ public class WebBookingHandler implements HttpHandler {
         String partnerId = getQueryParam(exchange, "partnerId");
         List<Map<String, String>> bookings = new ArrayList<>();
 
-        String sql = "SELECT * FROM bookings_info WHERE partner_id = ?";
+        String sql = "SELECT * FROM bookings_info WHERE partner_id = ? ORDER BY booking_id DESC";
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -122,6 +124,9 @@ public class WebBookingHandler implements HttpHandler {
                  PreparedStatement stmt = conn.prepareStatement(sql)) {
                 stmt.setString(1, bookingId);
                 success = stmt.executeUpdate() > 0;
+                if (success) {
+                    triggerBookingNotification(bookingId, "CANCELLED");
+                }
             } catch (SQLException e) { e.printStackTrace(); }
         }
 
@@ -159,10 +164,10 @@ public class WebBookingHandler implements HttpHandler {
                 try (ResultSet rs = fetchStmt.executeQuery()) {
                     if (rs.next()) {
                         currentStatus = rs.getString("booking_status").toUpperCase();
-                        String checkIn = rs.getString("check_in_date");
-                        String checkOut = rs.getString("check_out_date");
-                        if (checkIn != null && !checkIn.isEmpty()) checkInDate = LocalDate.parse(checkIn.split(" ")[0]);
-                        if (checkOut != null && !checkOut.isEmpty()) checkOutDate = LocalDate.parse(checkOut.split(" ")[0]);
+                        Date checkIn = rs.getDate("check_in_date");
+                        Date checkOut = rs.getDate("check_out_date");
+                        if (checkIn != null) checkInDate = checkIn.toLocalDate();
+                        if (checkOut != null) checkOutDate = checkOut.toLocalDate();
                     }
                 }
 
@@ -185,7 +190,6 @@ public class WebBookingHandler implements HttpHandler {
                                   && checkOutDate != null && !checkOutDate.isAfter(today);
                         break;
                     case "COMPLETED":
-                        // Final Fix: Allowed if status is CONFIRMED, CHECKED_IN, or CHECKED_OUT
                         allowed = "CONFIRMED".equals(currentStatus) || 
                                   "CHECKED_IN".equals(currentStatus) || 
                                   "CHECKED_OUT".equals(currentStatus);
@@ -197,7 +201,15 @@ public class WebBookingHandler implements HttpHandler {
                         updateStmt.setString(1, newStatus);
                         updateStmt.setString(2, bookingId);
                         success = updateStmt.executeUpdate() > 0;
-                        message = success ? "Status updated successfully" : "Update failed";
+                        if (success) {
+                            message = "Status updated successfully";
+                            // Notify both parties on important status changes
+                            if ("CONFIRMED".equals(newStatus) || "CANCELLED".equals(newStatus)) {
+                                triggerBookingNotification(bookingId, newStatus);
+                            }
+                        } else {
+                            message = "Update failed";
+                        }
                     }
                 } else {
                     message = "Action " + newStatus + " not allowed for current status: " + currentStatus;
@@ -212,5 +224,89 @@ public class WebBookingHandler implements HttpHandler {
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(200, response.getBytes(StandardCharsets.UTF_8).length);
         try (OutputStream os = exchange.getResponseBody()) { os.write(response.getBytes(StandardCharsets.UTF_8)); }
+    }
+
+    private void triggerBookingNotification(String bookingId, String status) {
+        new Thread(() -> {
+            try (Connection customerConn = dbConfig.getCustomerDataSource().getConnection();
+                 Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()) {
+
+                // 1. Fetch Booking and Customer Details
+                String bookingSql = "SELECT partner_id, guest_name, email, check_in_date, check_out_date, room_type, amount_paid_online, hotel_name " +
+                                  "FROM bookings_info WHERE booking_id = ?";
+                
+                String partnerId = "", gName = "", cEmail = "", cin = "", cout = "", rType = "", amt = "", hName = "";
+
+                try (PreparedStatement ps = customerConn.prepareStatement(bookingSql)) {
+                    ps.setString(1, bookingId);
+                    ResultSet rs = ps.executeQuery();
+                    if (rs.next()) {
+                        partnerId = rs.getString("partner_id");
+                        gName = rs.getString("guest_name");
+                        cEmail = rs.getString("email");
+                        cin = rs.getString("check_in_date");
+                        cout = rs.getString("check_out_date");
+                        rType = rs.getString("room_type");
+                        amt = rs.getString("amount_paid_online");
+                        hName = rs.getString("hotel_name");
+                    }
+                }
+
+                if (partnerId == null || partnerId.isEmpty()) return;
+
+                // 2. Fetch Partner Contact Info
+                String pName = "Partner", pEmail = "";
+                String partnerSql = "SELECT partner_name, email FROM partner_data WHERE partner_id = ?";
+                try (PreparedStatement ps2 = partnerConn.prepareStatement(partnerSql)) {
+                    ps2.setString(1, partnerId);
+                    ResultSet rs2 = ps2.executeQuery();
+                    if (rs2.next()) {
+                        pName = rs2.getString("partner_name");
+                        pEmail = rs2.getString("email");
+                    }
+                }
+
+                EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                
+                // 3. Prepare Email Content
+                String subject = "Booking Update: ID #" + bookingId + " is " + status;
+                String statusMsg = status.equalsIgnoreCase("CONFIRMED") 
+                    ? "has been successfully CONFIRMED." 
+                    : "has been CANCELLED.";
+
+                StringBuilder bodyTemplate = new StringBuilder();
+                bodyTemplate.append("Booking Status Update\n");
+                bodyTemplate.append("----------------------------\n");
+                bodyTemplate.append("Booking ID: ").append(bookingId).append("\n");
+                bodyTemplate.append("Hotel Name: ").append(hName).append("\n");
+                bodyTemplate.append("Guest Name: ").append(gName).append("\n");
+                bodyTemplate.append("Room Type: ").append(rType).append("\n");
+                bodyTemplate.append("Check-in: ").append(cin).append("\n");
+                bodyTemplate.append("Check-out: ").append(cout).append("\n");
+                bodyTemplate.append("Amount: ₹").append(amt != null ? amt : "0.00").append("\n");
+                bodyTemplate.append("----------------------------\n\n");
+
+                // Send to Partner
+                String partnerBody = "Hello " + pName + ",\n\n" +
+                                   "The status of a booking at your property " + statusMsg + "\n\n" +
+                                   bodyTemplate.toString() +
+                                   "Regards,\nHotel Operations Team";
+                if (pEmail != null && !pEmail.isEmpty()) {
+                    emailService.sendEmail(pEmail, subject, partnerBody);
+                }
+
+                // Send to Customer
+                String customerBody = "Hello " + gName + ",\n\n" +
+                                    "Your booking status at " + hName + " " + statusMsg + "\n\n" +
+                                    bodyTemplate.toString() +
+                                    "We look forward to serving you.\n\nRegards,\n" + hName + " Management";
+                if (cEmail != null && !cEmail.isEmpty()) {
+                    emailService.sendEmail(cEmail, subject, customerBody);
+                }
+
+            } catch (Exception e) {
+                System.err.println("[BookingNotificationError] Failed to send update emails: " + e.getMessage());
+            }
+        }).start();
     }
 }
