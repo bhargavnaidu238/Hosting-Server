@@ -10,6 +10,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class HomePageHandler implements HttpHandler {
 
@@ -55,21 +56,19 @@ public class HomePageHandler implements HttpHandler {
             }
         }
 
-        // --- NEW: Clean and Normalize the Type ---
         String normalizedType = normalizeString(hotelType);
 
-        // ROUTING LOGIC
-        if (searchQuery != null && !searchQuery.isBlank() && normalizedType.isEmpty()) {
-            handleGlobalSearch(exchange, searchQuery);
-        } else if (normalizedType.equals("payingguest") || normalizedType.equals("pg")) {
+        // SMART ROUTING: If searching for "pg" or "paying guest" keywords
+        if (normalizedType.contains("payingguest") || normalizedType.contains("pg")) {
             handlePayingGuestRequest(exchange, searchQuery);
+        } else if (searchQuery != null && !searchQuery.isBlank() && normalizedType.isEmpty()) {
+            handleGlobalSearch(exchange, searchQuery);
         } else {
-            // Pass the original hotelType but the handler now uses fuzzy matching
             handleHotelRequest(exchange, hotelType, searchQuery);
         }
     }
 
-    // Helper to strip "s" and special chars for routing comparison
+    // Helper: Normalize strings and strip trailing 's' for singular comparison
     private String normalizeString(String input) {
         if (input == null) return "";
         String clean = input.replaceAll("[_\\-\\s]", "").toLowerCase();
@@ -114,29 +113,35 @@ public class HomePageHandler implements HttpHandler {
     private List<Map<String, Object>> getHotelsData(String hotelType, String searchQuery) throws SQLException {
         List<Map<String, Object>> list = new ArrayList<>();
         StringBuilder sql = new StringBuilder("SELECT * FROM hotels_info WHERE status = 'Active'");
+        List<String> params = new ArrayList<>();
 
-        // FIXED: Using LIKE instead of = to handle "Hotels" vs "Hotel"
+        // 1. SMART FILTER BY CATEGORY (If user clicked a category)
         if (hotelType != null && !hotelType.isBlank()) {
+            String clean = normalizeString(hotelType);
             sql.append(" AND (LOWER(hotel_type) LIKE ? OR LOWER(hotel_type) LIKE ?)");
+            params.add("%" + clean + "%");
+            params.add("%" + hotelType.toLowerCase() + "%");
         }
+
+        // 2. SMART SEARCH LOGIC (Fuzzy matching on keywords)
         if (searchQuery != null && !searchQuery.isBlank()) {
-            sql.append(" AND (LOWER(hotel_name) LIKE ? OR LOWER(hotel_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
+            String[] tokens = searchQuery.toLowerCase().split("\\s+");
+            for (String token : tokens) {
+                if (token.length() < 2) continue;
+                String singular = normalizeString(token);
+                sql.append(" AND (LOWER(hotel_name) LIKE ? OR LOWER(hotel_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(address) LIKE ?)");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+            }
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
 
-            int idx = 1;
-            if (hotelType != null && !hotelType.isBlank()) {
-                String type = hotelType.toLowerCase();
-                // If it ends with 's', try both plural and singular
-                String singular = (type.endsWith("s") && type.length() > 3) ? type.substring(0, type.length() - 1) : type;
-                stmt.setString(idx++, "%" + singular + "%");
-                stmt.setString(idx++, "%" + type + "%");
-            }
-            if (searchQuery != null && !searchQuery.isBlank()) {
-                String p = "%" + searchQuery.toLowerCase() + "%";
-                for (int i = 0; i < 4; i++) stmt.setString(idx++, p);
+            for (int i = 0; i < params.size(); i++) {
+                stmt.setString(i + 1, params.get(i));
             }
 
             try (ResultSet rs = stmt.executeQuery()) {
@@ -160,23 +165,32 @@ public class HomePageHandler implements HttpHandler {
     private List<Map<String, Object>> getPGData(String searchQuery) throws SQLException {
         List<Map<String, Object>> list = new ArrayList<>();
         StringBuilder sql = new StringBuilder("SELECT * FROM paying_guest_info WHERE status = 'Active'");
+        List<String> params = new ArrayList<>();
 
         if (searchQuery != null && !searchQuery.isBlank()) {
-            sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(pg_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
+            String[] tokens = searchQuery.toLowerCase().split("\\s+");
+            for (String token : tokens) {
+                if (token.length() < 2) continue;
+                String singular = normalizeString(token);
+                sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(pg_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(address) LIKE ?)");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+            }
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
             
-            if (searchQuery != null && !searchQuery.isBlank()) {
-                String p = "%" + searchQuery.toLowerCase() + "%";
-                for (int i = 1; i <= 4; i++) stmt.setString(i, p);
+            for (int i = 0; i < params.size(); i++) {
+                stmt.setString(i + 1, params.get(i));
             }
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("id", rs.getString("id"));
+                    item.put("id", rs.getString("pg_id")); // Matched with CREATE TABLE schema
                     item.put("pg_name", rs.getString("pg_name"));
                     item.put("pg_type", rs.getString("pg_type"));
                     item.put("city", rs.getString("city"));
