@@ -55,7 +55,8 @@ public class HomePageHandler implements HttpHandler {
             }
         }
 
-        String normalizedType = (hotelType == null) ? "" : hotelType.replaceAll("[_\\-\\s]", "").toLowerCase();
+        // --- NEW: Clean and Normalize the Type ---
+        String normalizedType = normalizeString(hotelType);
 
         // ROUTING LOGIC
         if (searchQuery != null && !searchQuery.isBlank() && normalizedType.isEmpty()) {
@@ -63,8 +64,19 @@ public class HomePageHandler implements HttpHandler {
         } else if (normalizedType.equals("payingguest") || normalizedType.equals("pg")) {
             handlePayingGuestRequest(exchange, searchQuery);
         } else {
+            // Pass the original hotelType but the handler now uses fuzzy matching
             handleHotelRequest(exchange, hotelType, searchQuery);
         }
+    }
+
+    // Helper to strip "s" and special chars for routing comparison
+    private String normalizeString(String input) {
+        if (input == null) return "";
+        String clean = input.replaceAll("[_\\-\\s]", "").toLowerCase();
+        if (clean.endsWith("s") && clean.length() > 3) {
+            clean = clean.substring(0, clean.length() - 1);
+        }
+        return clean;
     }
 
     private void handleGlobalSearch(HttpExchange exchange, String searchQuery) throws IOException {
@@ -75,11 +87,10 @@ public class HomePageHandler implements HttpHandler {
             sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(results));
         } catch (SQLException e) {
             e.printStackTrace();
-            sendJsonResponse(exchange, 500, "{\"error\":\"Database error: " + e.getMessage() + "\"}");
+            sendJsonResponse(exchange, 500, "{\"error\":\"Database error\"}");
         }
     }
 
-    // --- FIXED: Explicitly defined handleHotelRequest ---
     private void handleHotelRequest(HttpExchange exchange, String hotelType, String searchQuery) throws IOException {
         try {
             List<Map<String, Object>> hotels = getHotelsData(hotelType, searchQuery);
@@ -90,7 +101,6 @@ public class HomePageHandler implements HttpHandler {
         }
     }
 
-    // --- FIXED: Explicitly defined handlePayingGuestRequest ---
     private void handlePayingGuestRequest(HttpExchange exchange, String searchQuery) throws IOException {
         try {
             List<Map<String, Object>> pgs = getPGData(searchQuery);
@@ -105,11 +115,12 @@ public class HomePageHandler implements HttpHandler {
         List<Map<String, Object>> list = new ArrayList<>();
         StringBuilder sql = new StringBuilder("SELECT * FROM hotels_info WHERE status = 'Active'");
 
+        // FIXED: Using LIKE instead of = to handle "Hotels" vs "Hotel"
         if (hotelType != null && !hotelType.isBlank()) {
-            sql.append(" AND LOWER(hotel_type) = ?");
+            sql.append(" AND (LOWER(hotel_type) LIKE ? OR LOWER(hotel_type) LIKE ?)");
         }
         if (searchQuery != null && !searchQuery.isBlank()) {
-            sql.append(" AND (LOWER(hotel_name) LIKE ? OR LOWER(hotel_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
+            sql.append(" AND (LOWER(hotel_name) LIKE ? OR LOWER(hotel_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -117,11 +128,15 @@ public class HomePageHandler implements HttpHandler {
 
             int idx = 1;
             if (hotelType != null && !hotelType.isBlank()) {
-                stmt.setString(idx++, hotelType.toLowerCase());
+                String type = hotelType.toLowerCase();
+                // If it ends with 's', try both plural and singular
+                String singular = (type.endsWith("s") && type.length() > 3) ? type.substring(0, type.length() - 1) : type;
+                stmt.setString(idx++, "%" + singular + "%");
+                stmt.setString(idx++, "%" + type + "%");
             }
             if (searchQuery != null && !searchQuery.isBlank()) {
                 String p = "%" + searchQuery.toLowerCase() + "%";
-                for (int i = 0; i < 5; i++) stmt.setString(idx++, p);
+                for (int i = 0; i < 4; i++) stmt.setString(idx++, p);
             }
 
             try (ResultSet rs = stmt.executeQuery()) {
@@ -147,7 +162,7 @@ public class HomePageHandler implements HttpHandler {
         StringBuilder sql = new StringBuilder("SELECT * FROM paying_guest_info WHERE status = 'Active'");
 
         if (searchQuery != null && !searchQuery.isBlank()) {
-            sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(pg_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
+            sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(pg_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ?)");
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -155,7 +170,7 @@ public class HomePageHandler implements HttpHandler {
             
             if (searchQuery != null && !searchQuery.isBlank()) {
                 String p = "%" + searchQuery.toLowerCase() + "%";
-                for (int i = 1; i <= 5; i++) stmt.setString(i, p);
+                for (int i = 1; i <= 4; i++) stmt.setString(i, p);
             }
 
             try (ResultSet rs = stmt.executeQuery()) {
@@ -196,8 +211,8 @@ public class HomePageHandler implements HttpHandler {
 
     private void addCorsHeaders(HttpExchange exchange) {
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
     }
 
     private void sendJsonResponse(HttpExchange exchange, int status, String json) throws IOException {
