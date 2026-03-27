@@ -55,7 +55,7 @@ public class ReviewsHandler implements HttpHandler {
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-            // --- DUPLICATE VALIDATION ---
+            // 1. DUPLICATE VALIDATION
             String checkSql = "SELECT count(*) FROM reviews WHERE hotel_id = ? AND user_id = ?";
             try (PreparedStatement checkStmt = conn.prepareStatement(checkSql)) {
                 checkStmt.setString(1, hotelId);
@@ -69,7 +69,7 @@ public class ReviewsHandler implements HttpHandler {
 
             conn.setAutoCommit(false); 
 
-            // 1. Insert Review
+            // 2. Insert into Reviews table
             String insertSql = "INSERT INTO reviews (hotel_id, user_id, rating, comment) VALUES (?, ?, ?, ?)";
             try (PreparedStatement stmt = conn.prepareStatement(insertSql)) {
                 stmt.setString(1, hotelId);
@@ -79,12 +79,24 @@ public class ReviewsHandler implements HttpHandler {
                 stmt.executeUpdate();
             }
 
-            // 2. Update Hotel Average & Count
-            String updateSql = "UPDATE hotels_info SET " +
-                               "avg_rating = (SELECT COALESCE(AVG(rating), 0) FROM reviews WHERE hotel_id = ?), " +
-                               "total_reviews = (SELECT COUNT(*) FROM reviews WHERE hotel_id = ?) " +
-                               "WHERE Hotel_ID = ?";
-            try (PreparedStatement stmt = conn.prepareStatement(updateSql)) {
+            // 3. Update Summary Tables (Logic to detect if it's a Hotel or PG)
+            String summaryTable;
+            String idColumn;
+            
+            if (hotelId.startsWith("PG")) {
+                summaryTable = "paying_guest_info";
+                idColumn = "pg_id";
+            } else {
+                summaryTable = "hotels_info";
+                idColumn = "Hotel_ID";
+            }
+
+            String updateSummarySql = "UPDATE " + summaryTable + " SET " +
+                                      "avg_rating = (SELECT COALESCE(AVG(rating), 0) FROM reviews WHERE hotel_id = ?), " +
+                                      "total_reviews = (SELECT COUNT(*) FROM reviews WHERE hotel_id = ?) " +
+                                      "WHERE " + idColumn + " = ?";
+                                      
+            try (PreparedStatement stmt = conn.prepareStatement(updateSummarySql)) {
                 stmt.setString(1, hotelId);
                 stmt.setString(2, hotelId);
                 stmt.setString(3, hotelId);
@@ -110,9 +122,6 @@ public class ReviewsHandler implements HttpHandler {
         }
 
         List<Map<String, Object>> reviewsList = new ArrayList<>();
-        
-        // --- PAGINATION & SORTING ---
-        // Added LIMIT 10 to restrict the result count
         String sql = "SELECT r.*, (u.first_name || ' ' || u.last_name) as user_name FROM reviews r " +
                      "JOIN user_info u ON r.user_id = u.user_id " +
                      "WHERE r.hotel_id = ? " +
