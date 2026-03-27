@@ -45,12 +45,10 @@ public class ReviewsHandler implements HttpHandler {
         InputStream is = exchange.getRequestBody();
         String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
         
-        // Debugging: Print body to console to see what Flutter is sending
         System.out.println("Received Review Body: " + body);
         
         Map<String, String> data = parseJsonBody(body);
 
-        // Validation
         if (!data.containsKey("hotel_id") || !data.containsKey("user_id") || !data.containsKey("rating")) {
             sendError(exchange, 400, "Missing required fields: hotel_id, user_id, or rating");
             return;
@@ -70,7 +68,6 @@ public class ReviewsHandler implements HttpHandler {
             }
 
             // 2. Update Hotel Average & Count in hotels_info
-            // Note: Using 'Hotel_ID' (matches your CREATE TABLE)
             String updateSql = "UPDATE hotels_info SET " +
                                "avg_rating = (SELECT COALESCE(AVG(rating), 0) FROM reviews WHERE hotel_id = ?), " +
                                "total_reviews = (SELECT COUNT(*) FROM reviews WHERE hotel_id = ?) " +
@@ -101,7 +98,9 @@ public class ReviewsHandler implements HttpHandler {
         }
 
         List<Map<String, Object>> reviewsList = new ArrayList<>();
-        String sql = "SELECT r.*, u.name as user_name FROM reviews r " +
+        
+        // FIXED: Concatenating first_name and last_name since 'name' column doesn't exist
+        String sql = "SELECT r.*, (u.first_name || ' ' || u.last_name) as user_name FROM reviews r " +
                      "JOIN user_info u ON r.user_id = u.user_id " +
                      "WHERE r.hotel_id = ? ORDER BY r.created_at DESC";
 
@@ -112,7 +111,7 @@ public class ReviewsHandler implements HttpHandler {
             while (rs.next()) {
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("review_id", rs.getLong("review_id"));
-                row.put("user_name", rs.getString("user_name"));
+                row.put("user_name", rs.getString("user_name")); // Combined name
                 row.put("rating", rs.getInt("rating"));
                 row.put("comment", rs.getString("comment"));
                 row.put("created_at", rs.getTimestamp("created_at").toString());
@@ -122,16 +121,12 @@ public class ReviewsHandler implements HttpHandler {
         sendJson(exchange, reviewsList);
     }
 
-    // --- IMPROVED JSON PARSER ---
     private Map<String, String> parseJsonBody(String body) {
         Map<String, String> map = new HashMap<>();
-        // Remove braces
         body = body.trim();
         if (body.startsWith("{")) body = body.substring(1);
         if (body.endsWith("}")) body = body.substring(0, body.length() - 1);
 
-        // Split by comma, but be careful of commas inside comments
-        // This is a basic fix; for production, use a library like Jackson or Gson
         String[] pairs = body.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
         
         for (String pair : pairs) {
