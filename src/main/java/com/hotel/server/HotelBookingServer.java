@@ -73,7 +73,6 @@ public class HotelBookingServer {
         server.createContext("/cancel-booking", new BookingHistoryHandler(dbConfig));
         server.createContext("/update-booking-dates", new BookingHistoryHandler(dbConfig));
         server.createContext("/filterHotels", new AppFilterHandler(dbConfig));
-        server.createContext("/home", new AppFilterHandler(dbConfig));
         
         // ========== WALLET & PAYMENTS ==========
         server.createContext("/wallet", new RewardsWalletHandler(dbConfig));
