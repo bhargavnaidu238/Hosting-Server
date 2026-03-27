@@ -84,26 +84,31 @@ public class HotelsHandler implements HttpHandler {
                     int cols = meta.getColumnCount();
 
                     while (rs.next()) {
-                        // Using LinkedHashMap to preserve order
                         Map<String, Object> row = new LinkedHashMap<>();
                         for (int i = 1; i <= cols; i++) {
                             String key = meta.getColumnLabel(i);
                             Object val = rs.getObject(i);
                             String valueStr = (val == null) ? "" : val.toString();
 
-                            // CRITICAL: Standardize keys for Flutter Room Selection logic
                             if (key.equalsIgnoreCase("hotel_name")) {
                                 row.put("Hotel_Name", valueStr);
                             } else if (key.equalsIgnoreCase("room_type")) {
-                                row.put("Room_Type", valueStr); // e.g. "Standard Room,Suite Room"
+                                row.put("Room_Type", valueStr);
                             } else if (key.equalsIgnoreCase("room_price")) {
-                                row.put("Room_Price", valueStr); // e.g. "1000,3000"
+                                row.put("Room_Price", valueStr);
                             } else if (key.equalsIgnoreCase("hotel_images")) {
                                 row.put("Hotel_Images", buildImageCsv(valueStr));
                             } else if (key.equalsIgnoreCase("amenities")) {
                                 row.put("Amenities", valueStr);
-                            } else {
-                                // Put original key as well for safety
+                            } 
+                            // --- ADDED THESE TWO BLOCKS ---
+                            else if (key.equalsIgnoreCase("avg_rating")) {
+                                row.put("avg_rating", valueStr); 
+                            } else if (key.equalsIgnoreCase("total_reviews")) {
+                                row.put("total_reviews", valueStr);
+                            } 
+                            // ------------------------------
+                            else {
                                 row.put(key, valueStr);
                             }
                         }
