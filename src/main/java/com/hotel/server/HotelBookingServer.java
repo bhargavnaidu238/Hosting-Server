@@ -37,6 +37,7 @@ import com.hotel.web.partner.WebBookingHandler;
 import com.hotel.web.partner.WebDashBoardHandler;
 import com.hotel.web.partner.WebLoginRegisterHandler;
 import com.hotel.web.partner.WebProfileHandler;
+import com.hotel.web.partner.WebReviewHandler;
 import com.hotel.web.partner.WebViewHotelsHandler;
 import com.hotel.web.partner.WebViewPGsHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -103,6 +104,7 @@ public class HotelBookingServer {
 
         server.createContext("/webviewhotels", new WebViewHotelsHandler(dbConfig));
         server.createContext("/webviewpgs", new WebViewPGsHandler(dbConfig));
+        server.createContext("/webgetreviews", new WebReviewHandler(dbConfig));
 
         server.createContext("/webgetPartnerBookings", new WebBookingHandler(dbConfig));
         server.createContext("/webcancelBooking", new WebBookingHandler(dbConfig));
