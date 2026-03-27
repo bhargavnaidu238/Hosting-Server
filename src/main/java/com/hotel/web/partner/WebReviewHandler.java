@@ -10,8 +10,6 @@ import java.io.*;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.List;
 
 public class WebReviewHandler implements HttpHandler {
 
@@ -23,6 +21,7 @@ public class WebReviewHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        // Add CORS Headers
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
@@ -35,6 +34,7 @@ public class WebReviewHandler implements HttpHandler {
         try {
             String email = "";
 
+            // Logic to read from URL (GET) or Body (POST)
             if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 String query = exchange.getRequestURI().getRawQuery();
                 if (query != null) {
@@ -88,15 +88,14 @@ public class WebReviewHandler implements HttpHandler {
     private JSONArray fetchPartnerReviews(String email) throws SQLException {
         JSONArray reviewList = new JSONArray();
 
-        // SQL logic: Concatenate first_name and last_name from the user_data table
-        // Join reviews with user_data to get the actual name instead of just ID
+        // SQL: Join with user_info and use COALESCE to safely handle NULL names
         String query = "SELECT r.review_id, r.rating, r.comment, r.created_at, r.user_id, r.hotel_id, " +
-                       "(u.first_name || ' ' || u.last_name) AS user_name, " +
+                       "(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS user_name, " +
                        "COALESCE(h.Hotel_Name, p.pg_name) AS property_name, " +
                        "COALESCE(h.city, p.city) AS property_city, " +
                        "CASE WHEN h.Hotel_ID IS NOT NULL THEN 'Hotel' ELSE 'PG' END AS property_type " +
                        "FROM reviews r " +
-                       "INNER JOIN user_data u ON r.user_id = u.user_id " +
+                       "INNER JOIN user_info u ON r.user_id = u.user_id " +
                        "LEFT JOIN hotels_info h ON r.hotel_id = h.Hotel_ID " +
                        "LEFT JOIN paying_guest_info p ON r.hotel_id = p.pg_id " +
                        "WHERE h.Partner_ID = (SELECT partner_id FROM partner_data WHERE LOWER(email) = LOWER(?)) " +
@@ -117,7 +116,7 @@ public class WebReviewHandler implements HttpHandler {
                 review.put("comment", rs.getString("comment") == null ? "" : rs.getString("comment"));
                 review.put("created_at", rs.getTimestamp("created_at").toString());
                 review.put("user_id", rs.getString("user_id"));
-                review.put("user_name", rs.getString("user_name")); // Full name returned here
+                review.put("user_name", rs.getString("user_name").trim()); // Sends combined name to Flutter
                 review.put("hotel_id", rs.getString("hotel_id"));
                 review.put("property_name", rs.getString("property_name"));
                 review.put("property_city", rs.getString("property_city"));
