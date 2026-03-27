@@ -17,7 +17,6 @@ public class ReviewsHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // CORS Headers
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
@@ -42,6 +41,55 @@ public class ReviewsHandler implements HttpHandler {
         }
     }
 
+    private void handlePostReview(HttpExchange exchange) throws IOException {
+        InputStream is = exchange.getRequestBody();
+        String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+        
+        // Debugging: Print body to console to see what Flutter is sending
+        System.out.println("Received Review Body: " + body);
+        
+        Map<String, String> data = parseJsonBody(body);
+
+        // Validation
+        if (!data.containsKey("hotel_id") || !data.containsKey("user_id") || !data.containsKey("rating")) {
+            sendError(exchange, 400, "Missing required fields: hotel_id, user_id, or rating");
+            return;
+        }
+
+        try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+            conn.setAutoCommit(false); 
+
+            // 1. Insert Review
+            String insertSql = "INSERT INTO reviews (hotel_id, user_id, rating, comment) VALUES (?, ?, ?, ?)";
+            try (PreparedStatement stmt = conn.prepareStatement(insertSql)) {
+                stmt.setString(1, data.get("hotel_id"));
+                stmt.setLong(2, Long.parseLong(data.get("user_id")));
+                stmt.setInt(3, Integer.parseInt(data.get("rating")));
+                stmt.setString(4, data.get("comment") != null ? data.get("comment") : "");
+                stmt.executeUpdate();
+            }
+
+            // 2. Update Hotel Average & Count in hotels_info
+            // Note: Using 'Hotel_ID' (matches your CREATE TABLE)
+            String updateSql = "UPDATE hotels_info SET " +
+                               "avg_rating = (SELECT COALESCE(AVG(rating), 0) FROM reviews WHERE hotel_id = ?), " +
+                               "total_reviews = (SELECT COUNT(*) FROM reviews WHERE hotel_id = ?) " +
+                               "WHERE Hotel_ID = ?";
+            try (PreparedStatement stmt = conn.prepareStatement(updateSql)) {
+                stmt.setString(1, data.get("hotel_id"));
+                stmt.setString(2, data.get("hotel_id"));
+                stmt.setString(3, data.get("hotel_id"));
+                stmt.executeUpdate();
+            }
+
+            conn.commit();
+            sendSimpleResponse(exchange, 201, "{\"message\":\"Review added successfully\"}");
+        } catch (Exception e) {
+            e.printStackTrace();
+            sendError(exchange, 500, "Database Error: " + e.getMessage());
+        }
+    }
+
     private void handleGetReviews(HttpExchange exchange) throws IOException, SQLException {
         String query = exchange.getRequestURI().getQuery();
         Map<String, String> params = parseQueryParams(query);
@@ -52,9 +100,7 @@ public class ReviewsHandler implements HttpHandler {
             return;
         }
 
-        List<Map<String, Object>> reviews = new ArrayList<>();
-        
-        // Query to get reviews joined with user names
+        List<Map<String, Object>> reviewsList = new ArrayList<>();
         String sql = "SELECT r.*, u.name as user_name FROM reviews r " +
                      "JOIN users u ON r.user_id = u.user_id " +
                      "WHERE r.hotel_id = ? ORDER BY r.created_at DESC";
@@ -70,59 +116,31 @@ public class ReviewsHandler implements HttpHandler {
                 row.put("rating", rs.getInt("rating"));
                 row.put("comment", rs.getString("comment"));
                 row.put("created_at", rs.getTimestamp("created_at").toString());
-                reviews.add(row);
+                reviewsList.add(row);
             }
         }
-        sendJson(exchange, reviews);
+        sendJson(exchange, reviewsList);
     }
 
-    private void handlePostReview(HttpExchange exchange) throws IOException {
-        // Read Request Body
-        InputStream is = exchange.getRequestBody();
-        String body = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-        Map<String, String> data = parseJsonBody(body);
-
-        try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-            conn.setAutoCommit(false); // Start Transaction
-
-            // 1. Insert Review
-            String insertSql = "INSERT INTO reviews (hotel_id, user_id, rating, comment) VALUES (?, ?, ?, ?)";
-            try (PreparedStatement stmt = conn.prepareStatement(insertSql)) {
-                stmt.setString(1, data.get("hotel_id"));
-                stmt.setLong(2, Long.parseLong(data.get("user_id")));
-                stmt.setInt(3, Integer.parseInt(data.get("rating")));
-                stmt.setString(4, data.get("comment"));
-                stmt.executeUpdate();
-            }
-
-            // 2. Update Hotel Average & Count
-            String updateSql = "UPDATE hotels_info SET " +
-                               "avg_rating = (SELECT AVG(rating) FROM reviews WHERE hotel_id = ?), " +
-                               "total_reviews = (SELECT COUNT(*) FROM reviews WHERE hotel_id = ?) " +
-                               "WHERE Hotel_ID = ?";
-            try (PreparedStatement stmt = conn.prepareStatement(updateSql)) {
-                stmt.setString(1, data.get("hotel_id"));
-                stmt.setString(2, data.get("hotel_id"));
-                stmt.setString(3, data.get("hotel_id"));
-                stmt.executeUpdate();
-            }
-
-            conn.commit();
-            sendSimpleResponse(exchange, 201, "{\"message\":\"Review added\"}");
-        } catch (Exception e) {
-            sendError(exchange, 500, "Database Error: " + e.getMessage());
-        }
-    }
-
-    // --- Helper Methods ---
-
+    // --- IMPROVED JSON PARSER ---
     private Map<String, String> parseJsonBody(String body) {
-        // Simple regex parser for "key":"value" (for a robust app, use Jackson/Gson)
         Map<String, String> map = new HashMap<>();
-        body = body.replace("{", "").replace("}", "").replace("\"", "");
-        for (String pair : body.split(",")) {
-            String[] kv = pair.split(":");
-            if (kv.length == 2) map.put(kv[0].trim(), kv[1].trim());
+        // Remove braces
+        body = body.trim();
+        if (body.startsWith("{")) body = body.substring(1);
+        if (body.endsWith("}")) body = body.substring(0, body.length() - 1);
+
+        // Split by comma, but be careful of commas inside comments
+        // This is a basic fix; for production, use a library like Jackson or Gson
+        String[] pairs = body.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
+        
+        for (String pair : pairs) {
+            String[] kv = pair.split(":(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
+            if (kv.length == 2) {
+                String key = kv[0].trim().replace("\"", "");
+                String value = kv[1].trim().replace("\"", "");
+                map.put(key, value);
+            }
         }
         return map;
     }
@@ -132,7 +150,9 @@ public class ReviewsHandler implements HttpHandler {
         if (query == null) return params;
         for (String param : query.split("&")) {
             String[] pair = param.split("=");
-            if (pair.length > 1) params.put(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8));
+            if (pair.length > 1) {
+                params.put(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8));
+            }
         }
         return params;
     }
@@ -144,7 +164,7 @@ public class ReviewsHandler implements HttpHandler {
             sb.append("{");
             int j = 0;
             for (Map.Entry<String, Object> e : m.entrySet()) {
-                sb.append("\"").append(e.getKey()).append("\":\"").append(String.valueOf(e.getValue())).append("\"");
+                sb.append("\"").append(e.getKey()).append("\":\"").append(escape(String.valueOf(e.getValue()))).append("\"");
                 if (j++ < m.size() - 1) sb.append(",");
             }
             sb.append("}");
@@ -154,20 +174,27 @@ public class ReviewsHandler implements HttpHandler {
         byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json");
         exchange.sendResponseHeaders(200, bytes.length);
-        exchange.getResponseBody().write(bytes);
-        exchange.getResponseBody().close();
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
     }
 
     private void sendSimpleResponse(HttpExchange exchange, int code, String json) throws IOException {
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json");
         exchange.sendResponseHeaders(code, bytes.length);
-        exchange.getResponseBody().write(bytes);
-        exchange.getResponseBody().close();
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
     }
 
     private void sendError(HttpExchange exchange, int code, String msg) throws IOException {
-        String json = "{\"error\":\"" + msg + "\"}";
+        String json = "{\"error\":\"" + escape(msg) + "\"}";
         sendSimpleResponse(exchange, code, json);
+    }
+
+    private String escape(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ");
     }
 }
