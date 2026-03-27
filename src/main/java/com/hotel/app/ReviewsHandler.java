@@ -102,7 +102,7 @@ public class ReviewsHandler implements HttpHandler {
 
         List<Map<String, Object>> reviewsList = new ArrayList<>();
         String sql = "SELECT r.*, u.name as user_name FROM reviews r " +
-                     "JOIN users u ON r.user_id = u.user_id " +
+                     "JOIN user_info u ON r.user_id = u.user_id " +
                      "WHERE r.hotel_id = ? ORDER BY r.created_at DESC";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
