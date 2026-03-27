@@ -63,7 +63,7 @@ public class ReviewsHandler implements HttpHandler {
             String insertSql = "INSERT INTO reviews (hotel_id, user_id, rating, comment) VALUES (?, ?, ?, ?)";
             try (PreparedStatement stmt = conn.prepareStatement(insertSql)) {
                 stmt.setString(1, data.get("hotel_id"));
-                stmt.setLong(2, Long.parseLong(data.get("user_id")));
+                stmt.setString(2, data.get("user_id"));
                 stmt.setInt(3, Integer.parseInt(data.get("rating")));
                 stmt.setString(4, data.get("comment") != null ? data.get("comment") : "");
                 stmt.executeUpdate();
