@@ -57,6 +57,7 @@ public class AddHotelsHandler implements HttpHandler {
         }
 
         try {
+            // ✅ Optimization: Read body once
             String body = readRequestBody(exchange);
             Map<String, String> params = parseForm(body);
 
@@ -67,6 +68,7 @@ public class AddHotelsHandler implements HttpHandler {
                 hotelId = "HOTEL_" + System.currentTimeMillis();
             }
 
+            // Image Processing
             if (params.containsKey("images")) {
                 try {
                     JSONObject json = new JSONObject(params.get("images"));
@@ -134,11 +136,7 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean addHotelToDB(String hotelId, Map<String, String> params) throws SQLException {
-        // SQL order: partner_id(1), hotel_name(2), hotel_type(3), room_type(4), address(5), city(6), state(7), country(8), pincode(9), hotel_location(10), total_rooms(11), available_rooms(12), room_price(13), amenities(14), policies(15), avg_rating(16), hotel_contact(17), about_this_property(18), hotel_images(19), customization(20), status(21)
-        String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, "
-                + "country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, avg_rating, "
-                + "hotel_contact, about_this_property, hotel_images, customization, status) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::numeric, ?, ?, ?, ?::cust_enum, ?::status_enum)";
+        String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, rating, hotel_contact, about_this_property, hotel_images, customization, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, true);
@@ -147,10 +145,7 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean updateHotelInDB(String hotelId, Map<String, String> params) throws SQLException {
-        // Fixed Parameter sequence to match setHotelParams exactly
-        String sql = "UPDATE hotels_info SET partner_id=?, hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, "
-                + "pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, "
-                + "avg_rating=?::numeric, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?::cust_enum, status=?::status_enum WHERE hotel_id=?";
+        String sql = "UPDATE hotels_info SET hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, rating=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, false);
@@ -160,49 +155,38 @@ public class AddHotelsHandler implements HttpHandler {
 
     private void setHotelParams(PreparedStatement stmt, String hotelId, Map<String, String> params, boolean isInsert) throws SQLException {
         int idx = 1;
-        if (isInsert) {
-            stmt.setString(idx++, hotelId); // idx 1
-        }
+        if (isInsert) stmt.setString(idx++, hotelId);
+        stmt.setString(idx++, params.getOrDefault("partner_id", ""));
+        stmt.setString(idx++, params.getOrDefault("hotel_name", ""));
+        stmt.setString(idx++, params.getOrDefault("hotel_type", ""));
+        stmt.setString(idx++, params.getOrDefault("room_type", "Standard"));
+        stmt.setString(idx++, params.getOrDefault("address", ""));
+        stmt.setString(idx++, params.getOrDefault("city", ""));
+        stmt.setString(idx++, params.getOrDefault("state", ""));
+        stmt.setString(idx++, params.getOrDefault("country", ""));
+        stmt.setString(idx++, params.getOrDefault("pincode", ""));
+        stmt.setString(idx++, params.getOrDefault("hotel_location", ""));
+        stmt.setInt(idx++, Integer.parseInt(params.getOrDefault("total_rooms", "0")));
+        stmt.setInt(idx++, Integer.parseInt(params.getOrDefault("available_rooms", params.getOrDefault("total_rooms", "0"))));
+        stmt.setString(idx++, params.getOrDefault("room_price", ""));
+        stmt.setString(idx++, params.getOrDefault("amenities", ""));
+        stmt.setString(idx++, params.getOrDefault("policies", ""));
+        stmt.setDouble(idx++, Double.parseDouble(params.getOrDefault("rating", "0.0")));
+        stmt.setString(idx++, params.getOrDefault("hotel_contact", ""));
+        stmt.setString(idx++, params.getOrDefault("about_this_property", ""));
+        stmt.setString(idx++, params.get("hotel_images"));
         
-        stmt.setString(idx++, params.getOrDefault("partner_id", "")); // idx 2
-        stmt.setString(idx++, params.getOrDefault("hotel_name", "")); // idx 3
-        stmt.setString(idx++, params.getOrDefault("hotel_type", "")); // idx 4
-        stmt.setString(idx++, params.getOrDefault("room_type", "Standard")); // idx 5
-        stmt.setString(idx++, params.getOrDefault("address", "")); // idx 6
-        stmt.setString(idx++, params.getOrDefault("city", "")); // idx 7
-        stmt.setString(idx++, params.getOrDefault("state", "")); // idx 8
-        stmt.setString(idx++, params.getOrDefault("country", "")); // idx 9
-        stmt.setString(idx++, params.getOrDefault("pincode", "")); // idx 10
-        stmt.setString(idx++, params.getOrDefault("hotel_location", "")); // idx 11
-        stmt.setInt(idx++, Integer.parseInt(params.getOrDefault("total_rooms", "0"))); // idx 12
-        stmt.setInt(idx++, Integer.parseInt(params.getOrDefault("available_rooms", params.getOrDefault("total_rooms", "0")))); // idx 13
-        stmt.setString(idx++, params.getOrDefault("room_price", "")); // idx 14
-        stmt.setString(idx++, params.getOrDefault("amenities", "")); // idx 15
-        stmt.setString(idx++, params.getOrDefault("policies", "")); // idx 16
-        
-        // Rating - idx 17 (Numeric)
-        String ratingStr = params.get("avg_rating");
-        if (ratingStr == null) ratingStr = params.getOrDefault("rating", "0.0");
-        stmt.setDouble(idx++, Double.parseDouble(ratingStr));
-
-        stmt.setString(idx++, params.getOrDefault("hotel_contact", "")); // idx 18
-        stmt.setString(idx++, params.getOrDefault("about_this_property", "")); // idx 19
-        stmt.setString(idx++, params.get("hotel_images")); // idx 20
-        
-        // Customization - idx 21 (Enum)
         String customization = params.getOrDefault("customization", "No");
-        stmt.setString(idx++, VALID_CUSTOMIZATION.contains(customization) ? customization : "No");
+        stmt.setObject(idx++, VALID_CUSTOMIZATION.contains(customization) ? customization : "No", Types.OTHER);
         
-        // Status - idx 22 (Enum)
         String status = params.getOrDefault("status", "Active");
-        stmt.setString(idx++, VALID_STATUS.contains(status) ? status : "Active");
+        stmt.setObject(idx++, VALID_STATUS.contains(status) ? status : "Active", Types.OTHER);
         
-        if (!isInsert) {
-            stmt.setString(idx, hotelId); // idx 23
-        }
+        if (!isInsert) stmt.setString(idx, hotelId);
     }
 
     private String readRequestBody(HttpExchange exchange) throws IOException {
+        // ✅ Optimization: Large buffer size for massive Base64 strings
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8), 8192)) {
             StringBuilder sb = new StringBuilder();
             char[] buffer = new char[8192];
