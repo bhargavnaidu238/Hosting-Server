@@ -57,7 +57,6 @@ public class AddHotelsHandler implements HttpHandler {
         }
 
         try {
-            // ✅ Optimization: Read body once
             String body = readRequestBody(exchange);
             Map<String, String> params = parseForm(body);
 
@@ -68,7 +67,7 @@ public class AddHotelsHandler implements HttpHandler {
                 hotelId = "HOTEL_" + System.currentTimeMillis();
             }
 
-            // Image Processing
+            // Image Processing Logic (Unchanged)
             if (params.containsKey("images")) {
                 try {
                     JSONObject json = new JSONObject(params.get("images"));
@@ -136,10 +135,11 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean addHotelToDB(String hotelId, Map<String, String> params) throws SQLException {
+        // Updated to include avg_rating and omit rating
         String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, "
-        		+ "country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, hotel_contact, "
-        		+ "about_this_property, hotel_images, customization, status, avg_rating) "
-        		+ "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                + "country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, hotel_contact, "
+                + "about_this_property, hotel_images, customization, status, avg_rating) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, true);
@@ -148,9 +148,10 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean updateHotelInDB(String hotelId, Map<String, String> params) throws SQLException {
-        String sql = "UPDATE hotels_info SET hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, "
-        		+ "pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?"
-        		+ "hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=?, rating=? WHERE hotel_id=?";
+        // Updated SET clause for avg_rating and fixed missing comma before hotel_contact
+        String sql = "UPDATE hotels_info SET partner_id=?, hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, "
+                + "pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, "
+                + "avg_rating=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, false);
@@ -160,7 +161,10 @@ public class AddHotelsHandler implements HttpHandler {
 
     private void setHotelParams(PreparedStatement stmt, String hotelId, Map<String, String> params, boolean isInsert) throws SQLException {
         int idx = 1;
-        if (isInsert) stmt.setString(idx++, hotelId);
+        if (isInsert) {
+            stmt.setString(idx++, hotelId);
+        }
+        
         stmt.setString(idx++, params.getOrDefault("partner_id", ""));
         stmt.setString(idx++, params.getOrDefault("hotel_name", ""));
         stmt.setString(idx++, params.getOrDefault("hotel_type", ""));
@@ -176,7 +180,12 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setString(idx++, params.getOrDefault("room_price", ""));
         stmt.setString(idx++, params.getOrDefault("amenities", ""));
         stmt.setString(idx++, params.getOrDefault("policies", ""));
-        stmt.setDouble(idx++, Double.parseDouble(params.getOrDefault("avg_rating", "0.0")));
+        
+        // Handle avg_rating (creator default or existing value)
+        String ratingStr = params.get("avg_rating");
+        if (ratingStr == null) ratingStr = params.getOrDefault("rating", "0.0"); // Fallback for old key names
+        stmt.setDouble(idx++, Double.parseDouble(ratingStr));
+
         stmt.setString(idx++, params.getOrDefault("hotel_contact", ""));
         stmt.setString(idx++, params.getOrDefault("about_this_property", ""));
         stmt.setString(idx++, params.get("hotel_images"));
@@ -187,11 +196,12 @@ public class AddHotelsHandler implements HttpHandler {
         String status = params.getOrDefault("status", "Active");
         stmt.setObject(idx++, VALID_STATUS.contains(status) ? status : "Active", Types.OTHER);
         
-        if (!isInsert) stmt.setString(idx, hotelId);
+        if (!isInsert) {
+            stmt.setString(idx, hotelId);
+        }
     }
 
     private String readRequestBody(HttpExchange exchange) throws IOException {
-        // ✅ Optimization: Large buffer size for massive Base64 strings
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8), 8192)) {
             StringBuilder sb = new StringBuilder();
             char[] buffer = new char[8192];
