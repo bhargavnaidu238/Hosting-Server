@@ -56,7 +56,7 @@ public class AddPgHandler implements HttpHandler {
         }
 
         // ===============================
-        // ✅ IMAGE HANDLING (MATCHES FRONTEND)
+        // ✅ IMAGE HANDLING
         // ===============================
         try {
             String pgId = params.getOrDefault("pg_id", "").trim();
@@ -136,8 +136,8 @@ public class AddPgHandler implements HttpHandler {
     }
 
     private boolean addPGToDB(String pgId, Map<String, String> params) throws SQLException {
-        // SQL updated to remove 'description'
-        String sql = "INSERT INTO paying_guest_info (pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, room_price, amenities, policies, rating, pg_contact, about_this_pg, pg_images, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::pg_status_enum)";
+        // Updated: Removed 'rating', added 'avg_rating' and 'total_reviews'
+        String sql = "INSERT INTO paying_guest_info (pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, room_price, amenities, policies, avg_rating, total_reviews, pg_contact, about_this_pg, pg_images, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::pg_status_enum)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setParams(stmt, pgId, params, false);
@@ -146,8 +146,8 @@ public class AddPgHandler implements HttpHandler {
     }
 
     private boolean updatePGInDB(String pgId, Map<String, String> params) throws SQLException {
-        // SQL updated to remove 'description'
-        String sql = "UPDATE paying_guest_info SET partner_id=?, pg_name=?, pg_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, total_single_sharing_rooms=?, total_double_sharing_rooms=?, total_three_sharing_rooms=?, total_four_sharing_rooms=?, total_five_sharing_rooms=?, hotel_location=?, available_rooms=?, room_price=?, amenities=?, policies=?, rating=?, pg_contact=?, about_this_pg=?, pg_images=?, status=? WHERE pg_id=?";
+        // Updated: Removed 'rating', added 'avg_rating' and 'total_reviews'
+        String sql = "UPDATE paying_guest_info SET partner_id=?, pg_name=?, pg_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, total_single_sharing_rooms=?, total_double_sharing_rooms=?, total_three_sharing_rooms=?, total_four_sharing_rooms=?, total_five_sharing_rooms=?, hotel_location=?, available_rooms=?, room_price=?, amenities=?, policies=?, avg_rating=?, total_reviews=?, pg_contact=?, about_this_pg=?, pg_images=?, status=?::pg_status_enum WHERE pg_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setParams(stmt, pgId, params, true);
@@ -181,8 +181,11 @@ public class AddPgHandler implements HttpHandler {
         stmt.setString(i++, params.getOrDefault("amenities", ""));
         stmt.setString(i++, params.getOrDefault("policies", ""));
 
-        double rating = parseDoubleSafe(params.get("rating"));
-        stmt.setDouble(i++, rating);
+        // New Rating Logic
+        double avgRating = parseDoubleSafe(params.get("avg_rating"));
+        int totalReviews = parseIntSafe(params.get("total_reviews"));
+        stmt.setDouble(i++, avgRating);
+        stmt.setInt(i++, totalReviews);
 
         stmt.setString(i++, params.getOrDefault("pg_contact", ""));
         stmt.setString(i++, params.getOrDefault("about_this_pg", ""));
