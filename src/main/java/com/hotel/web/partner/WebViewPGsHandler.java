@@ -65,12 +65,12 @@ public class WebViewPGsHandler implements HttpHandler {
     private List<String> fetchPGsFromDB(String partnerId) throws SQLException {
         List<String> pgRows = new ArrayList<>();
 
-        // Strictly ordered SQL based on your CREATE TABLE schema
+        // Updated SQL: rating replaced with avg_rating and total_reviews
         String sql =
             "SELECT pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, " + // 1-10
             "total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, " + // 11-13
             "total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, " + // 14-17
-            "room_price, amenities, policies, rating, pg_contact, about_this_pg, pg_images, status " + // 18-25
+            "room_price, amenities, policies, avg_rating, total_reviews, pg_contact, about_this_pg, pg_images, status " + // 18-26
             "FROM paying_guest_info WHERE partner_id = ?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -82,18 +82,17 @@ public class WebViewPGsHandler implements HttpHandler {
                 while (rs.next()) {
                     List<String> row = new ArrayList<>();
 
-                    // Add all 25 columns from the DB result set
-                    for (int i = 1; i <= 25; i++) {
+                    // Add all 26 columns from the DB result set
+                    for (int i = 1; i <= 26; i++) {
                         row.add(escapeCell(rs.getString(i)));
                     }
 
-                    // Calculate Total Rooms separately
+                    // Calculate Total Rooms separately using indices 11-15
                     int total = safeInt(rs.getString(11)) + safeInt(rs.getString(12)) + 
                                 safeInt(rs.getString(13)) + safeInt(rs.getString(14)) + 
                                 safeInt(rs.getString(15));
                     
-                    // Add Total Rooms as an EXTRA column at the very end
-                    // This prevents overwriting the rating or status fields
+                    // Add Total Rooms as an EXTRA column (Index 27 for the frontend)
                     row.add(String.valueOf(total)); 
 
                     pgRows.add(String.join("|", row));
@@ -145,6 +144,7 @@ public class WebViewPGsHandler implements HttpHandler {
 
     private String escapeCell(String s) {
         if (s == null) return "";
+        // Sanitize string to prevent breaking the pipe-delimited format
         return s.replace("&", "and").replace("=", ":").replace("|", "/").replace("\r", " ").replace("\n", " ");
     }
 
