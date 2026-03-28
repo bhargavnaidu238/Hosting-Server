@@ -67,7 +67,6 @@ public class AddHotelsHandler implements HttpHandler {
                 hotelId = "HOTEL_" + System.currentTimeMillis();
             }
 
-            // Image Processing Logic
             if (params.containsKey("images")) {
                 try {
                     JSONObject json = new JSONObject(params.get("images"));
@@ -135,10 +134,11 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean addHotelToDB(String hotelId, Map<String, String> params) throws SQLException {
+        // ADDED EXPLICIT CASTING: ?::cust_enum and ?::status_enum
         String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, "
                 + "country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, hotel_contact, "
                 + "about_this_property, hotel_images, customization, status, avg_rating) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::cust_enum, ?::status_enum, ?)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, true);
@@ -147,9 +147,10 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean updateHotelInDB(String hotelId, Map<String, String> params) throws SQLException {
+        // ADDED EXPLICIT CASTING: customization = ?::cust_enum, status = ?::status_enum
         String sql = "UPDATE hotels_info SET partner_id=?, hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, "
                 + "pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, "
-                + "avg_rating=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
+                + "avg_rating=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?::cust_enum, status=?::status_enum WHERE hotel_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, false);
@@ -179,7 +180,6 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setString(idx++, params.getOrDefault("amenities", ""));
         stmt.setString(idx++, params.getOrDefault("policies", ""));
         
-        // Handle avg_rating
         String ratingStr = params.get("avg_rating");
         if (ratingStr == null) ratingStr = params.getOrDefault("rating", "0.0");
         stmt.setDouble(idx++, Double.parseDouble(ratingStr));
@@ -188,13 +188,12 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setString(idx++, params.getOrDefault("about_this_property", ""));
         stmt.setString(idx++, params.get("hotel_images"));
         
-        // Enum Fix for customization
+        // Setting these as Strings because the SQL query now handles the casting
         String customization = params.getOrDefault("customization", "No");
-        stmt.setObject(idx++, VALID_CUSTOMIZATION.contains(customization) ? customization : "No", Types.OTHER);
+        stmt.setString(idx++, VALID_CUSTOMIZATION.contains(customization) ? customization : "No");
         
-        // Enum Fix for status
         String status = params.getOrDefault("status", "Active");
-        stmt.setObject(idx++, VALID_STATUS.contains(status) ? status : "Active", Types.OTHER);
+        stmt.setString(idx++, VALID_STATUS.contains(status) ? status : "Active");
         
         if (!isInsert) {
             stmt.setString(idx, hotelId);
