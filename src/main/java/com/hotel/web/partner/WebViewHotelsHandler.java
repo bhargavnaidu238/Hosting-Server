@@ -63,7 +63,7 @@ public class WebViewHotelsHandler implements HttpHandler {
         
         // Fixed: Added 'n' to customization, added missing space, and fixed string concatenation
         String sql = "SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, " +
-                     "hotel_location, total_rooms, available_rooms, room_price, amenities, policies, rating, hotel_contact, " +
+                     "hotel_location, total_rooms, available_rooms, room_price, amenities, policies, hotel_contact,  avg_rating," +
                      "about_this_property, hotel_images, customization, status " +
                      "FROM hotels_info WHERE partner_id = ?";
 

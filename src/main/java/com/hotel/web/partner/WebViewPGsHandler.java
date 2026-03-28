@@ -70,7 +70,7 @@ public class WebViewPGsHandler implements HttpHandler {
             "SELECT pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, " + // 1-10
             "total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, " + // 11-13
             "total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, " + // 14-17
-            "room_price, amenities, policies, rating, pg_contact, about_this_pg, pg_images, status " + // 18-25
+            "room_price, amenities, policies, pg_contact, about_this_pg, pg_images, status, avg_rating " + // 18-25
             "FROM paying_guest_info WHERE partner_id = ?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
