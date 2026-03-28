@@ -67,7 +67,7 @@ public class AddHotelsHandler implements HttpHandler {
                 hotelId = "HOTEL_" + System.currentTimeMillis();
             }
 
-            // Image Processing Logic (Unchanged)
+            // Image Processing Logic
             if (params.containsKey("images")) {
                 try {
                     JSONObject json = new JSONObject(params.get("images"));
@@ -135,7 +135,6 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean addHotelToDB(String hotelId, Map<String, String> params) throws SQLException {
-        // Updated to include avg_rating and omit rating
         String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, "
                 + "country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, hotel_contact, "
                 + "about_this_property, hotel_images, customization, status, avg_rating) "
@@ -148,7 +147,6 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean updateHotelInDB(String hotelId, Map<String, String> params) throws SQLException {
-        // Updated SET clause for avg_rating and fixed missing comma before hotel_contact
         String sql = "UPDATE hotels_info SET partner_id=?, hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, "
                 + "pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, "
                 + "avg_rating=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
@@ -181,18 +179,20 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setString(idx++, params.getOrDefault("amenities", ""));
         stmt.setString(idx++, params.getOrDefault("policies", ""));
         
-        // Handle avg_rating (creator default or existing value)
+        // Handle avg_rating
         String ratingStr = params.get("avg_rating");
-        if (ratingStr == null) ratingStr = params.getOrDefault("rating", "0.0"); // Fallback for old key names
+        if (ratingStr == null) ratingStr = params.getOrDefault("rating", "0.0");
         stmt.setDouble(idx++, Double.parseDouble(ratingStr));
 
         stmt.setString(idx++, params.getOrDefault("hotel_contact", ""));
         stmt.setString(idx++, params.getOrDefault("about_this_property", ""));
         stmt.setString(idx++, params.get("hotel_images"));
         
+        // Enum Fix for customization
         String customization = params.getOrDefault("customization", "No");
         stmt.setObject(idx++, VALID_CUSTOMIZATION.contains(customization) ? customization : "No", Types.OTHER);
         
+        // Enum Fix for status
         String status = params.getOrDefault("status", "Active");
         stmt.setObject(idx++, VALID_STATUS.contains(status) ? status : "Active", Types.OTHER);
         
