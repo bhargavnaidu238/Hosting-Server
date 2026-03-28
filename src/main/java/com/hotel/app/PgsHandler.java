@@ -49,6 +49,7 @@ public class PgsHandler implements HttpHandler {
                 }
 
                 List<Map<String, Object>> pgsList = new ArrayList<>();
+                // Updated SQL to ensure we target pg_id for reviews and active status
                 String sql = "SELECT * FROM paying_guest_info WHERE Status = 'Active'";
 
                 try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -63,12 +64,29 @@ public class PgsHandler implements HttpHandler {
                         for (int i = 1; i <= cols; i++) {
                             String key = meta.getColumnLabel(i);
                             Object val = rs.getObject(i);
+                            String valueStr = (val == null) ? "" : val.toString();
                             
                             // Process PG_Images into a CSV string of full URLs
                             if ("pg_images".equalsIgnoreCase(key)) {
-                                row.put("pg_images", buildImageCsv(rs.getString("pg_images")));
-                            } else {
-                                row.put(key, val == null ? "" : val.toString());
+                                row.put("pg_images", buildImageCsv(valueStr));
+                            } 
+                            // Standardization for Rating functionality
+                            else if ("avg_rating".equalsIgnoreCase(key)) {
+                                row.put("avg_rating", valueStr); // Force lowercase for Flutter compatibility
+                            } 
+                            else if ("total_reviews".equalsIgnoreCase(key)) {
+                                row.put("total_reviews", valueStr); // Force lowercase for Flutter compatibility
+                            }
+                            else if ("pg_id".equalsIgnoreCase(key)) {
+                                row.put("pg_id", valueStr);
+                                row.put("Hotel_ID", valueStr); // Mapping pg_id to Hotel_ID for ReviewPage reuse
+                            }
+                            else if ("pg_name".equalsIgnoreCase(key)) {
+                                row.put("pg_name", valueStr);
+                                row.put("Hotel_Name", valueStr); // Mapping pg_name to Hotel_Name for ReviewPage reuse
+                            }
+                            else {
+                                row.put(key, valueStr);
                             }
                         }
                         pgsList.add(row);
@@ -90,13 +108,12 @@ public class PgsHandler implements HttpHandler {
     }
 
     /**
-     * FIXED: Processes raw DB string and returns a single comma-separated string.
+     * Processes raw DB string and returns a single comma-separated string.
      * Handles Supabase URLs and local paths properly.
      */
     private String buildImageCsv(String raw) {
         if (raw == null || raw.isBlank()) return "";
         
-        // Remove brackets or quotes if they exist from accidental JSON storage
         String cleanRaw = raw.trim();
         if (cleanRaw.startsWith("[") && cleanRaw.endsWith("]")) {
             cleanRaw = cleanRaw.substring(1, cleanRaw.length() - 1);
@@ -106,14 +123,12 @@ public class PgsHandler implements HttpHandler {
         List<String> fixedUrls = new ArrayList<>();
 
         for (String p : parts) {
-            String t = p.trim().replace("\"", ""); // Remove extra quotes
+            String t = p.trim().replace("\"", ""); 
             if (t.isEmpty()) continue;
 
             if (t.toLowerCase().startsWith("http")) {
-                // Already a full URL (Supabase/Web)
                 fixedUrls.add(t.replace("localhost", "10.0.2.2"));
             } else {
-                // Local filename - prepend server path
                 fixedUrls.add("http://10.0.2.2:8080/hotel_images/" + t);
             }
         }
@@ -166,7 +181,7 @@ public class PgsHandler implements HttpHandler {
             Map<String, Object> m = list.get(i);
             sb.append("{");
             int j = 0;
-            for (var e : m.entrySet()) {
+            for (Map.Entry<String, Object> e : m.entrySet()) {
                 sb.append("\"").append(escape(e.getKey())).append("\":\"")
                   .append(escape(String.valueOf(e.getValue()))).append("\"");
                 if (j++ < m.size() - 1) sb.append(",");
@@ -180,6 +195,10 @@ public class PgsHandler implements HttpHandler {
 
     private String escape(String s) {
         if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ");
+        return s.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", " ")
+                .replace("\r", " ")
+                .replace("\t", " ");
     }
 }

@@ -20,6 +20,7 @@ public class HotelsHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        // Handle CORS
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
@@ -33,12 +34,14 @@ public class HotelsHandler implements HttpHandler {
         String path = uri.getPath();
 
         try {
+            // Serve Images
             if (path.startsWith("/hotel_images/")) {
                 String fileName = path.substring("/hotel_images/".length());
                 serveImage(exchange, fileName);
                 return;
             }
 
+            // Handle Hotels Metadata
             if (path.startsWith("/hotels")) {
                 if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                     sendError(exchange, 405, "Method Not Allowed");
@@ -59,13 +62,13 @@ public class HotelsHandler implements HttpHandler {
 
                 List<Map<String, Object>> hotels = new ArrayList<>();
 
+                // Build SQL Query
                 String sql = "SELECT * FROM hotels_info WHERE status = 'Active'";
-
                 if (typeFilter != null && !typeFilter.trim().isEmpty()) {
                     sql += " AND hotel_type = ?";
                 }
                 if (detailsPage && hotelId != null) {
-                    sql += " AND hotel_id = ?";
+                    sql += " AND Hotel_ID = ?";
                 }
 
                 try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -84,26 +87,28 @@ public class HotelsHandler implements HttpHandler {
                     int cols = meta.getColumnCount();
 
                     while (rs.next()) {
-                        // Using LinkedHashMap to preserve order
                         Map<String, Object> row = new LinkedHashMap<>();
                         for (int i = 1; i <= cols; i++) {
                             String key = meta.getColumnLabel(i);
                             Object val = rs.getObject(i);
                             String valueStr = (val == null) ? "" : val.toString();
 
-                            // CRITICAL: Standardize keys for Flutter Room Selection logic
+                            // Standardization for Flutter Frontend
                             if (key.equalsIgnoreCase("hotel_name")) {
                                 row.put("Hotel_Name", valueStr);
                             } else if (key.equalsIgnoreCase("room_type")) {
-                                row.put("Room_Type", valueStr); // e.g. "Standard Room,Suite Room"
+                                row.put("Room_Type", valueStr);
                             } else if (key.equalsIgnoreCase("room_price")) {
-                                row.put("Room_Price", valueStr); // e.g. "1000,3000"
+                                row.put("Room_Price", valueStr);
                             } else if (key.equalsIgnoreCase("hotel_images")) {
                                 row.put("Hotel_Images", buildImageCsv(valueStr));
                             } else if (key.equalsIgnoreCase("amenities")) {
                                 row.put("Amenities", valueStr);
+                            } else if (key.equalsIgnoreCase("avg_rating")) {
+                                row.put("avg_rating", valueStr); // Matches Flutter lowercase key
+                            } else if (key.equalsIgnoreCase("total_reviews")) {
+                                row.put("total_reviews", valueStr); // Matches Flutter lowercase key
                             } else {
-                                // Put original key as well for safety
                                 row.put(key, valueStr);
                             }
                         }
@@ -131,6 +136,7 @@ public class HotelsHandler implements HttpHandler {
             if (t.toLowerCase().startsWith("http")) {
                 fixedUrls.add(t);
             } else {
+                // Adjust this IP to your local server/emulator IP
                 fixedUrls.add("http://10.0.2.2:8080/hotel_images/" + t);
             }
         }
@@ -139,6 +145,7 @@ public class HotelsHandler implements HttpHandler {
 
     private Map<String, String> parseQueryParams(String query) {
         Map<String, String> params = new HashMap<>();
+        if (query == null) return params;
         for (String param : query.split("&")) {
             String[] pair = param.split("=");
             if (pair.length > 1) {

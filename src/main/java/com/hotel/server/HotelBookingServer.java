@@ -10,6 +10,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.util.concurrent.Executors;
+
 import com.hotel.app.AppFilterHandler;
 import com.hotel.app.BookingHandler;
 import com.hotel.app.BookingHistoryHandler;
@@ -20,6 +21,7 @@ import com.hotel.app.PaymentHandler;
 import com.hotel.app.PgsHandler;
 import com.hotel.app.ProfileHandler;
 import com.hotel.app.RegisterHandler;
+import com.hotel.app.ReviewsHandler;
 import com.hotel.app.RewardsWalletHandler;
 import com.hotel.notification.service.EmailHandler;
 import com.hotel.utilities.DbConfig;
@@ -35,6 +37,7 @@ import com.hotel.web.partner.WebBookingHandler;
 import com.hotel.web.partner.WebDashBoardHandler;
 import com.hotel.web.partner.WebLoginRegisterHandler;
 import com.hotel.web.partner.WebProfileHandler;
+import com.hotel.web.partner.WebReviewHandler;
 import com.hotel.web.partner.WebViewHotelsHandler;
 import com.hotel.web.partner.WebViewPGsHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -71,7 +74,7 @@ public class HotelBookingServer {
         server.createContext("/cancel-booking", new BookingHistoryHandler(dbConfig));
         server.createContext("/update-booking-dates", new BookingHistoryHandler(dbConfig));
         server.createContext("/filterHotels", new AppFilterHandler(dbConfig));
-
+        
         // ========== WALLET & PAYMENTS ==========
         server.createContext("/wallet", new RewardsWalletHandler(dbConfig));
         server.createContext("/wallet/deposit", new RewardsWalletHandler(dbConfig));
@@ -101,6 +104,7 @@ public class HotelBookingServer {
 
         server.createContext("/webviewhotels", new WebViewHotelsHandler(dbConfig));
         server.createContext("/webviewpgs", new WebViewPGsHandler(dbConfig));
+        server.createContext("/webgetreviews", new WebReviewHandler(dbConfig));
 
         server.createContext("/webgetPartnerBookings", new WebBookingHandler(dbConfig));
         server.createContext("/webcancelBooking", new WebBookingHandler(dbConfig));
@@ -117,6 +121,8 @@ public class HotelBookingServer {
         server.createContext("/send-email", new EmailHandler(dbConfig));
         server.createContext("/send-email-otp", new EmailHandler(dbConfig));
         server.createContext("/verify-email-otp", new EmailHandler(dbConfig));
+        
+        server.createContext("/reviews", new ReviewsHandler(dbConfig));
 
 
 
