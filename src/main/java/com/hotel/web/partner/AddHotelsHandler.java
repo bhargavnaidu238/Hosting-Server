@@ -134,11 +134,11 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean addHotelToDB(String hotelId, Map<String, String> params) throws SQLException {
-        // ADDED EXPLICIT CASTING: ?::cust_enum and ?::status_enum
+        // FIXED: Added ::numeric cast to the last parameter (avg_rating)
         String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, "
                 + "country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, hotel_contact, "
                 + "about_this_property, hotel_images, customization, status, avg_rating) "
-                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::cust_enum, ?::status_enum, ?)";
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::cust_enum, ?::status_enum, ?::numeric)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, true);
@@ -147,10 +147,10 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean updateHotelInDB(String hotelId, Map<String, String> params) throws SQLException {
-        // ADDED EXPLICIT CASTING: customization = ?::cust_enum, status = ?::status_enum
+        // FIXED: Added ::numeric cast to avg_rating=?
         String sql = "UPDATE hotels_info SET partner_id=?, hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, "
                 + "pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, "
-                + "avg_rating=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?::cust_enum, status=?::status_enum WHERE hotel_id=?";
+                + "avg_rating=?::numeric, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?::cust_enum, status=?::status_enum WHERE hotel_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, false);
@@ -180,6 +180,7 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setString(idx++, params.getOrDefault("amenities", ""));
         stmt.setString(idx++, params.getOrDefault("policies", ""));
         
+        // Rating handled as Double, SQL query casts it to numeric
         String ratingStr = params.get("avg_rating");
         if (ratingStr == null) ratingStr = params.getOrDefault("rating", "0.0");
         stmt.setDouble(idx++, Double.parseDouble(ratingStr));
@@ -188,7 +189,6 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setString(idx++, params.getOrDefault("about_this_property", ""));
         stmt.setString(idx++, params.get("hotel_images"));
         
-        // Setting these as Strings because the SQL query now handles the casting
         String customization = params.getOrDefault("customization", "No");
         stmt.setString(idx++, VALID_CUSTOMIZATION.contains(customization) ? customization : "No");
         
