@@ -5,7 +5,6 @@ import com.hotel.utilities.DbConfig;
 import com.razorpay.*;
 import com.sun.net.httpserver.*;
 import org.json.JSONObject;
-
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
@@ -218,7 +217,6 @@ public class PaymentHandler implements HttpHandler {
         try { return Double.parseDouble(o.toString().replace(",", "")); } catch (Exception e) { return 0.0; }
     }
 
-    // Overloaded helper methods for JSON construction
     private String json(String k, String v) { 
         return "{\"" + k + "\":\"" + v + "\"}"; 
     }

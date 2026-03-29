@@ -10,6 +10,7 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class HomePageHandler implements HttpHandler {
 
@@ -55,16 +56,26 @@ public class HomePageHandler implements HttpHandler {
             }
         }
 
-        String normalizedType = (hotelType == null) ? "" : hotelType.replaceAll("[_\\-\\s]", "").toLowerCase();
+        String normalizedType = normalizeString(hotelType);
 
-        // ROUTING LOGIC
-        if (searchQuery != null && !searchQuery.isBlank() && normalizedType.isEmpty()) {
-            handleGlobalSearch(exchange, searchQuery);
-        } else if (normalizedType.equals("payingguest") || normalizedType.equals("pg")) {
+        // SMART ROUTING: If searching for "pg" or "paying guest" keywords
+        if (normalizedType.contains("payingguest") || normalizedType.contains("pg")) {
             handlePayingGuestRequest(exchange, searchQuery);
+        } else if (searchQuery != null && !searchQuery.isBlank() && normalizedType.isEmpty()) {
+            handleGlobalSearch(exchange, searchQuery);
         } else {
             handleHotelRequest(exchange, hotelType, searchQuery);
         }
+    }
+
+    // Helper: Normalize strings and strip trailing 's' for singular comparison
+    private String normalizeString(String input) {
+        if (input == null) return "";
+        String clean = input.replaceAll("[_\\-\\s]", "").toLowerCase();
+        if (clean.endsWith("s") && clean.length() > 3) {
+            clean = clean.substring(0, clean.length() - 1);
+        }
+        return clean;
     }
 
     private void handleGlobalSearch(HttpExchange exchange, String searchQuery) throws IOException {
@@ -75,11 +86,10 @@ public class HomePageHandler implements HttpHandler {
             sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(results));
         } catch (SQLException e) {
             e.printStackTrace();
-            sendJsonResponse(exchange, 500, "{\"error\":\"Database error: " + e.getMessage() + "\"}");
+            sendJsonResponse(exchange, 500, "{\"error\":\"Database error\"}");
         }
     }
 
-    // --- FIXED: Explicitly defined handleHotelRequest ---
     private void handleHotelRequest(HttpExchange exchange, String hotelType, String searchQuery) throws IOException {
         try {
             List<Map<String, Object>> hotels = getHotelsData(hotelType, searchQuery);
@@ -90,7 +100,6 @@ public class HomePageHandler implements HttpHandler {
         }
     }
 
-    // --- FIXED: Explicitly defined handlePayingGuestRequest ---
     private void handlePayingGuestRequest(HttpExchange exchange, String searchQuery) throws IOException {
         try {
             List<Map<String, Object>> pgs = getPGData(searchQuery);
@@ -104,24 +113,35 @@ public class HomePageHandler implements HttpHandler {
     private List<Map<String, Object>> getHotelsData(String hotelType, String searchQuery) throws SQLException {
         List<Map<String, Object>> list = new ArrayList<>();
         StringBuilder sql = new StringBuilder("SELECT * FROM hotels_info WHERE status = 'Active'");
+        List<String> params = new ArrayList<>();
 
+        // 1. SMART FILTER BY CATEGORY (If user clicked a category)
         if (hotelType != null && !hotelType.isBlank()) {
-            sql.append(" AND LOWER(hotel_type) = ?");
+            String clean = normalizeString(hotelType);
+            sql.append(" AND (LOWER(hotel_type) LIKE ? OR LOWER(hotel_type) LIKE ?)");
+            params.add("%" + clean + "%");
+            params.add("%" + hotelType.toLowerCase() + "%");
         }
+
+        // 2. SMART SEARCH LOGIC (Fuzzy matching on keywords)
         if (searchQuery != null && !searchQuery.isBlank()) {
-            sql.append(" AND (LOWER(hotel_name) LIKE ? OR LOWER(hotel_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
+            String[] tokens = searchQuery.toLowerCase().split("\\s+");
+            for (String token : tokens) {
+                if (token.length() < 2) continue;
+                String singular = normalizeString(token);
+                sql.append(" AND (LOWER(hotel_name) LIKE ? OR LOWER(hotel_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(address) LIKE ?)");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+            }
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
 
-            int idx = 1;
-            if (hotelType != null && !hotelType.isBlank()) {
-                stmt.setString(idx++, hotelType.toLowerCase());
-            }
-            if (searchQuery != null && !searchQuery.isBlank()) {
-                String p = "%" + searchQuery.toLowerCase() + "%";
-                for (int i = 0; i < 5; i++) stmt.setString(idx++, p);
+            for (int i = 0; i < params.size(); i++) {
+                stmt.setString(i + 1, params.get(i));
             }
 
             try (ResultSet rs = stmt.executeQuery()) {
@@ -145,23 +165,32 @@ public class HomePageHandler implements HttpHandler {
     private List<Map<String, Object>> getPGData(String searchQuery) throws SQLException {
         List<Map<String, Object>> list = new ArrayList<>();
         StringBuilder sql = new StringBuilder("SELECT * FROM paying_guest_info WHERE status = 'Active'");
+        List<String> params = new ArrayList<>();
 
         if (searchQuery != null && !searchQuery.isBlank()) {
-            sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(pg_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(state) LIKE ? OR LOWER(country) LIKE ?)");
+            String[] tokens = searchQuery.toLowerCase().split("\\s+");
+            for (String token : tokens) {
+                if (token.length() < 2) continue;
+                String singular = normalizeString(token);
+                sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(pg_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(address) LIKE ?)");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+                params.add("%" + singular + "%");
+            }
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
             
-            if (searchQuery != null && !searchQuery.isBlank()) {
-                String p = "%" + searchQuery.toLowerCase() + "%";
-                for (int i = 1; i <= 5; i++) stmt.setString(i, p);
+            for (int i = 0; i < params.size(); i++) {
+                stmt.setString(i + 1, params.get(i));
             }
 
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("id", rs.getString("id"));
+                    item.put("id", rs.getString("pg_id")); // Matched with CREATE TABLE schema
                     item.put("pg_name", rs.getString("pg_name"));
                     item.put("pg_type", rs.getString("pg_type"));
                     item.put("city", rs.getString("city"));
@@ -196,8 +225,8 @@ public class HomePageHandler implements HttpHandler {
 
     private void addCorsHeaders(HttpExchange exchange) {
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
     }
 
     private void sendJsonResponse(HttpExchange exchange, int status, String json) throws IOException {
