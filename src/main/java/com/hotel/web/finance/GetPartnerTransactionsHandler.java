@@ -86,9 +86,7 @@ public class GetPartnerTransactionsHandler implements HttpHandler {
         sendResponse(exchange, 200, response);
     }
 
-    // ======================================================================
     // AUTO REVERSE FINANCE WHEN FAILED
-    // ======================================================================
     private void adjustFinanceForFailed(Connection conn, String partnerId, double amount) {
         try {
             String checkSql =

@@ -1,31 +1,29 @@
 package com.hotel.web.finance;
 
 import com.hotel.utilities.DbConfig;
+import com.hotel.notification.service.EmailService;
 import com.sun.net.httpserver.*;
 import java.io.*;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
-import java.sql.Date;
 import java.util.*;
 
 public class RequestPayoutHandler implements HttpHandler {
 
-	private final DbConfig dbConfig;
+    private final DbConfig dbConfig;
+    private static final double MIN_WITHDRAWAL = 5000.0;
+    private static final double FALLBACK_COMMISSION_PERCENT = 15.0;
 
     public RequestPayoutHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
     }
 
-    private static final double MIN_WITHDRAWAL = 5000.0;
-    private static final double FALLBACK_COMMISSION_PERCENT = 15.0;
-
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
-        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+        exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(204, -1);
@@ -38,184 +36,148 @@ public class RequestPayoutHandler implements HttpHandler {
 
         String body = readBody(exchange);
         Map<String, String> params = parseForm(body);
-
         String partnerId = params.get("partner_id");
-        double requestedAmount;
-
-        try {
-            requestedAmount = Double.parseDouble(params.getOrDefault("amount", "0"));
-        } catch (Exception e) {
-            requestedAmount = 0;
-        }
-
-        String comments = params.getOrDefault("comments", "").trim();
-        if (comments.isEmpty())
-            comments = "User Requested Payment";
+        double requestedAmount = Double.parseDouble(params.getOrDefault("amount", "0"));
+        String comments = params.getOrDefault("comments", "User Requested Payout").trim();
 
         if (partnerId == null || partnerId.isEmpty()) {
-            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"partner_id is required\"}");
-            return;
-        }
-
-        if (requestedAmount < MIN_WITHDRAWAL) {
-            sendResponse(exchange, 200,
-                    "{\"status\":\"error\",\"message\":\"Minimum withdrawal ₹" + MIN_WITHDRAWAL + "\"}");
+            sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"partner_id required\"}");
             return;
         }
 
         Connection finConn = null;
         Connection bookConn = null;
-        boolean oldAutoCommit = true;
 
         try {
-
-            /**COMPUTE COMPLETED BOOKINGS REVENUE **/
             bookConn = dbConfig.getCustomerDataSource().getConnection();
             double totalRevenue = computeTotalRevenueFromBookings(bookConn, partnerId);
-            totalRevenue = round2(totalRevenue);
 
-            /**FETCH FINANCE ROW WITH LOCK **/
             finConn = dbConfig.getPartnerDataSource().getConnection();
-            oldAutoCommit = finConn.getAutoCommit();
             finConn.setAutoCommit(false);
 
-            double commissionPercent = 0;
-            String selectSQL =
-                    "SELECT commission_percentage, paid_payout, pending_payout FROM partner_finance WHERE partner_id=? FOR UPDATE";
+            // 1. Fetch Finance Row with Lock
+            double commPct, netRev;
+            String bankAcc, bankName;
+            
+            String selectSQL = "SELECT Commission_Percentage, Bank_Name, Account_Number " +
+                             "FROM Partner_Finance WHERE Partner_ID=? FOR UPDATE";
 
             try (PreparedStatement ps = finConn.prepareStatement(selectSQL)) {
                 ps.setString(1, partnerId);
                 ResultSet rs = ps.executeQuery();
-
                 if (!rs.next()) {
                     finConn.rollback();
-                    sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Partner not found\"}");
+                    sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Finance record not found\"}");
                     return;
                 }
-
-                commissionPercent = rs.getDouble("commission_percentage");
-                if (commissionPercent <= 0)
-                    commissionPercent = FALLBACK_COMMISSION_PERCENT;
+                commPct = rs.getDouble("Commission_Percentage") > 0 ? rs.getDouble("Commission_Percentage") : FALLBACK_COMMISSION_PERCENT;
+                bankAcc = rs.getString("Account_Number");
+                bankName = rs.getString("Bank_Name");
             }
 
-            /** Commission & Net revenue **/
-            double commissionAmount = round2(totalRevenue * commissionPercent / 100.0);
-            double netRevenue = round2(totalRevenue - commissionAmount);
+            netRev = round2(totalRevenue - (totalRevenue * commPct / 100.0));
+            double balanceAmount = round2(netRev - requestedAmount);
 
-            requestedAmount = round2(requestedAmount);
-
-            /** Compute balance (this is the Balance_Amount that will be stored in Partner_Transactions) **/
-            double balanceAmount = round2(netRevenue - requestedAmount);
-            if (balanceAmount < 0) balanceAmount = 0.0;
-
-            /** Validate requested amount does not exceed available pending (netRevenue) **/
-            if (requestedAmount > netRevenue) {
+            if (requestedAmount > netRev) {
                 finConn.rollback();
-                sendResponse(exchange, 200,
-                        "{\"status\":\"error\",\"message\":\"Requested amount exceeds available payout (" + netRevenue + ")\"}");
+                sendResponse(exchange, 200, "{\"status\":\"error\",\"message\":\"Insufficient funds. Net revenue: " + netRev + "\"}");
                 return;
             }
 
-            /**UPDATE FINANCE TABLE — mapping explicitly as you requested:
-                 pending_payout = balance_amount (from transaction)
-                 paid_payout    = withdrawal_amount (requestedAmount for THIS transaction)
-                 Also update total_revenue, net_revenue, commission_percentage, last_payout_date **/
-            String updateFinanceSQL = """
-                    UPDATE partner_finance
-                    SET total_revenue = ?,
-                        commission_percentage = ?,
-                        net_revenue = ?,
-                        pending_payout = ?,
-                        paid_payout = ?,
-                        last_payout_fate = ?
-                    WHERE partner_id = ?
-                    """;
-
-            Date txDate = new java.sql.Date(System.currentTimeMillis());
-
-            try (PreparedStatement upd = finConn.prepareStatement(updateFinanceSQL)) {
-                upd.setDouble(1, totalRevenue);                     // Total_Revenue
-                upd.setDouble(2, commissionPercent);                // Commission_Percentage
-                upd.setDouble(3, netRevenue);                       // Net_Revenue
-                upd.setDouble(4, balanceAmount);                    // Pending_Payout <- Balance_Amount
-                upd.setDouble(5, requestedAmount);                  // Paid_Payout    <- Withdrawal_Amount (this tx)
-                upd.setDate(6, txDate);                             // Last_Payout_Date <- Transaction_Date
-                upd.setString(7, partnerId);
-                upd.executeUpdate();
-            }
-
-            /**INSERT TRANSACTION **/
-            String txId = "TX_" + System.currentTimeMillis();
-
-            String insert = """
-                    INSERT INTO partner_transactions
-                    (partner_id, transaction_id, transaction_date, total_amount, withdrawal_amount, balance_amount,
-                     Sstatus, transaction_type, comments)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """;
-
-            try (PreparedStatement ins = finConn.prepareStatement(insert)) {
-                ins.setString(1, partnerId);
-                ins.setString(2, txId);
-                ins.setTimestamp(3, new Timestamp(System.currentTimeMillis()));
-                ins.setDouble(4, netRevenue);         // Total_Amount -> Net revenue
-                ins.setDouble(5, requestedAmount);    // Withdrawal_Amount
-                ins.setDouble(6, balanceAmount);      // Balance_Amount
-                ins.setString(7, "Requested");
-                ins.setString(8, "PAYOUT");
-                ins.setString(9, comments);
-                ins.executeUpdate();
-            }
-
-            /**HANDLE IF STATUS LATER BECOMES FAILED
-             * This rollback logic will:
-             *  - add the transaction's Withdrawal_Amount back to Partner_Finance.Pending_Payout
-             *  - subtract Withdrawal_Amount from Partner_Finance.Paid_Payout
-             *  - set Partner_Transactions.Withdrawal_Amount = 0
-             *
-             * We update rows for this partner where the transaction status is 'Failed'.
-             */
-            String failureSQL = """
-                    UPDATE partner_finance F
-                    JOIN partner_transactions T ON F.partner_id = T.partner_id
-                    SET
-                        F.pending_payout = F.pending_payout + T.withdrawal_amount,
-                        F.pending_payout = F.pending_payout - T.withdrawal_amount,
-                        T.withdrawal_amount = 0
-                    WHERE T.status = 'Failed' AND T.partner_id = ?
-                    """;
-
-            try (PreparedStatement ps = finConn.prepareStatement(failureSQL)) {
-                ps.setString(1, partnerId);
+            // 2. Update Partner_Finance
+            String updateSQL = "UPDATE Partner_Finance SET Total_Revenue=?, Net_Revenue=?, Pending_Payout=?, Paid_Payout=?, Last_Payout_Date=? WHERE Partner_ID=?";
+            try (PreparedStatement ps = finConn.prepareStatement(updateSQL)) {
+                ps.setDouble(1, totalRevenue);
+                ps.setDouble(2, netRev);
+                ps.setDouble(3, balanceAmount);
+                ps.setDouble(4, requestedAmount);
+                ps.setDate(5, new java.sql.Date(System.currentTimeMillis()));
+                ps.setString(6, partnerId);
                 ps.executeUpdate();
             }
 
+            // 3. Insert Transaction with ENUM CASTS
+            String txId = "TX_" + System.currentTimeMillis();
+            String insertSQL = "INSERT INTO Partner_Transactions (Partner_ID, Transaction_ID, Transaction_Date, Total_Amount, " +
+                             "Withdrawal_Amount, Balance_Amount, Status, Transaction_Type, Comments) " +
+                             "VALUES (?, ?, ?, ?, ?, ?, ?::payment_status_enum, ?::transaction_type_enum, ?)";
+
+            try (PreparedStatement ps = finConn.prepareStatement(insertSQL)) {
+                ps.setString(1, partnerId);
+                ps.setString(2, txId);
+                ps.setTimestamp(3, new Timestamp(System.currentTimeMillis()));
+                ps.setDouble(4, netRev);
+                ps.setDouble(5, requestedAmount);
+                ps.setDouble(6, balanceAmount);
+                ps.setString(7, "Requested");
+                ps.setString(8, "PAYOUT");
+                ps.setString(9, comments);
+                ps.executeUpdate();
+            }
+
+            // 4. Finalize DB work before starting email thread
             finConn.commit();
 
-            sendResponse(exchange, 200,
-                    "{\"status\":\"success\",\"message\":\"Payout requested\",\"transaction_id\":\"" + txId + "\"}");
+            // 5. Trigger Email (Passing raw data, not the connection)
+            triggerPayoutEmail(partnerId, txId, requestedAmount, balanceAmount, bankAcc, bankName, comments);
+
+            sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"Payout requested\",\"transaction_id\":\"" + txId + "\"}");
 
         } catch (Exception e) {
+            if (finConn != null) try { finConn.rollback(); } catch (SQLException ignored) {}
             e.printStackTrace();
-            try { if (finConn != null) finConn.rollback(); } catch (Exception ignored) {}
             sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"" + e.getMessage() + "\"}");
         } finally {
-            try { if (finConn != null) { finConn.setAutoCommit(oldAutoCommit); finConn.close(); }} catch (Exception ignored) {}
-            try { if (bookConn != null) bookConn.close(); } catch (Exception ignored) {}
+            if (finConn != null) try { finConn.close(); } catch (SQLException ignored) {}
+            if (bookConn != null) try { bookConn.close(); } catch (SQLException ignored) {}
         }
     }
 
-    /** Helpers **/
+    private void triggerPayoutEmail(String pid, String txId, double amt, double bal, String acc, String bank, String comm) {
+        new Thread(() -> {
+            // Background thread opens its OWN fresh connection
+            try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+                String sql = "SELECT partner_name, email FROM partner_data WHERE partner_id = ?";
+                try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                    ps.setString(1, pid);
+                    ResultSet rs = ps.executeQuery();
+                    if (rs.next()) {
+                        String name = rs.getString("partner_name");
+                        String email = rs.getString("email");
+                        String maskedAcc = (acc != null && acc.length() > 4) ? "XXXX" + acc.substring(acc.length() - 4) : acc;
 
-    private double computeTotalRevenueFromBookings(Connection conn, String partnerId) throws Exception {
-        String sql = """
-            SELECT SUM(original_amount) AS total
-            FROM bookings_info
-            WHERE partner_id=? AND booking_status='COMPLETED'""";
+                        System.out.println("[EmailService] Dispatching payout notification to: " + email);
+
+                        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                        String subject = "Payout Request Received - " + txId;
+                        String body = "Hello " + name + ",\n\n" +
+                                     "Your payout request has been successfully submitted.\n\n" +
+                                     "Requested Amount: ₹" + amt + "\n" +
+                                     "Pending Balance: ₹" + bal + "\n" +
+                                     "Bank Name: " + bank + "\n" +
+                                     "Account Number: " + maskedAcc + "\n" +
+                                     "Status: REQUESTED\n" +
+                                     "Comments: " + comm + "\n\n" +
+                                     "The amount will be processed within our standard settlement period.\n\n" +
+                                     "Regards,\nFinance Team";
+                        
+                        emailService.sendEmail(email, subject, body);
+                        System.out.println("[EmailService] Notification sent successfully for TX: " + txId);
+                    }
+                }
+            } catch (Exception e) { 
+                System.err.println("[EmailService] Critical Failure: " + e.getMessage());
+                e.printStackTrace(); 
+            }
+        }).start();
+    }
+
+    private double computeTotalRevenueFromBookings(Connection conn, String pid) throws SQLException {
+        String sql = "SELECT SUM(original_amount) FROM bookings_info WHERE partner_id=? AND booking_status='COMPLETED'";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, partnerId);
+            ps.setString(1, pid);
             ResultSet rs = ps.executeQuery();
-            return rs.next() ? rs.getDouble("total") : 0.0;
+            return rs.next() ? rs.getDouble(1) : 0.0;
         }
     }
 
@@ -230,7 +192,6 @@ public class RequestPayoutHandler implements HttpHandler {
 
     private Map<String, String> parseForm(String body) throws UnsupportedEncodingException {
         Map<String, String> map = new HashMap<>();
-        if (body == null) return map;
         for (String p : body.split("&")) {
             String[] kv = p.split("=", 2);
             if (kv.length == 2) map.put(URLDecoder.decode(kv[0], "UTF-8"), URLDecoder.decode(kv[1], "UTF-8"));
@@ -240,7 +201,7 @@ public class RequestPayoutHandler implements HttpHandler {
 
     private void sendResponse(HttpExchange exchange, int code, String msg) throws IOException {
         byte[] bytes = msg.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
         exchange.sendResponseHeaders(code, bytes.length);
         exchange.getResponseBody().write(bytes);
         exchange.getResponseBody().close();
