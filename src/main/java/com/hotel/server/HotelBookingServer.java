@@ -20,6 +20,7 @@ import com.hotel.app.PaymentHandler;
 import com.hotel.app.PgsHandler;
 import com.hotel.app.ProfileHandler;
 import com.hotel.app.RegisterHandler;
+import com.hotel.app.ReviewsHandler;
 import com.hotel.app.RewardsWalletHandler;
 import com.hotel.notification.service.EmailHandler;
 import com.hotel.utilities.DbConfig;
@@ -35,7 +36,7 @@ import com.hotel.web.partner.WebBookingHandler;
 import com.hotel.web.partner.WebDashBoardHandler;
 import com.hotel.web.partner.WebLoginRegisterHandler;
 import com.hotel.web.partner.WebProfileHandler;
-import com.hotel.web.partner.WebReviewsHandler;
+import com.hotel.web.partner.WebReviewHandler;
 import com.hotel.web.partner.WebViewHotelsHandler;
 import com.hotel.web.partner.WebViewPGsHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -45,14 +46,14 @@ public class HotelBookingServer {
     public static void main(String[] args) throws Exception {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "10000"));
         HttpServer server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
-        System.out.println("🚀 Server starting on port: " + port);
+        System.out.println("Server starting on port: " + port);
 
         DbConfig dbConfig = new DbConfig();
         try (Connection customerConn = dbConfig.getCustomerDataSource().getConnection();
              Connection partnerConn = dbConfig.getPartnerDataSource().getConnection()) {
-            System.out.println("✅ Database connections validated successfully");
+            System.out.println("Database connections validated successfully");
         } catch (Exception e) {
-            System.err.println("❌ Database connection failed!");
+            System.err.println("Database connection failed!");
             e.printStackTrace();
             System.exit(1);
         }
@@ -72,7 +73,7 @@ public class HotelBookingServer {
         server.createContext("/cancel-booking", new BookingHistoryHandler(dbConfig));
         server.createContext("/update-booking-dates", new BookingHistoryHandler(dbConfig));
         server.createContext("/filterHotels", new AppFilterHandler(dbConfig));
-
+        
         // ========== WALLET & PAYMENTS ==========
         server.createContext("/wallet", new RewardsWalletHandler(dbConfig));
         server.createContext("/wallet/deposit", new RewardsWalletHandler(dbConfig));
@@ -102,37 +103,38 @@ public class HotelBookingServer {
 
         server.createContext("/webviewhotels", new WebViewHotelsHandler(dbConfig));
         server.createContext("/webviewpgs", new WebViewPGsHandler(dbConfig));
-        
+        server.createContext("/webgetreviews", new WebReviewHandler(dbConfig));
+
         server.createContext("/webgetPartnerBookings", new WebBookingHandler(dbConfig));
         server.createContext("/webcancelBooking", new WebBookingHandler(dbConfig));
         server.createContext("/webupdateBookingStatus", new WebBookingHandler(dbConfig));
         server.createContext("/setNotificationViewed", new SetFinanceNotificationViewedHandler(dbConfig));
-        server.createContext("/webgetreviews", new WebReviewsHandler(dbConfig));
-        
+
         // ========== PARTNER FINANCE ==========
         server.createContext("/getPartnerFinance", new GetPartnerFinanceHandler(dbConfig));
         server.createContext("/updateBankDetails", new UpdateBankDetailsHandler(dbConfig));
         server.createContext("/requestPayout", new RequestPayoutHandler(dbConfig));
         server.createContext("/getPartnerTransactions", new GetPartnerTransactionsHandler(dbConfig));
         
-        
      // ========== Notification Service ==========
         server.createContext("/send-email", new EmailHandler(dbConfig));
         server.createContext("/send-email-otp", new EmailHandler(dbConfig));
         server.createContext("/verify-email-otp", new EmailHandler(dbConfig));
+        
+        server.createContext("/reviews", new ReviewsHandler(dbConfig));
 
 
 
         server.setExecutor(Executors.newFixedThreadPool(20));
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("🛑 Shutting down server...");
+            System.out.println("Shutting down server...");
             dbConfig.close();
             server.stop(1);
         }));
 
         server.start();
-        System.out.println("✅ Server started successfully on port " + port);
+        System.out.println("Server started successfully on port " + port);
     }
 
     /**
@@ -173,7 +175,7 @@ public class HotelBookingServer {
         if (responseCode == 200 || responseCode == 201) {
             return supabaseUrl + "/storage/v1/object/public/" + bucketName + "/" + fileName;
         } else {
-            // ✅ FIX: Improved Error Handling to avoid memory leaks
+            //FIX: Improved Error Handling to avoid memory leaks
             StringBuilder errorMsg = new StringBuilder();
             InputStream errorStream = conn.getErrorStream();
             if (errorStream != null) {

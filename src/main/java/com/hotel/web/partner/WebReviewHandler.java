@@ -11,11 +11,11 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
 
-public class WebReviewsHandler implements HttpHandler {
+public class WebReviewHandler implements HttpHandler {
 
     private final DbConfig dbConfig;
 
-    public WebReviewsHandler(DbConfig dbConfig) {
+    public WebReviewHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
     }
 
