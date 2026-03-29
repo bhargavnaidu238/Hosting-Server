@@ -53,7 +53,7 @@ public class WebViewHotelsHandler implements HttpHandler {
                 sendResponse(exchange, 400, "status=error&message=Missing parameters");
             }
         } catch (SQLException e) {
-            e.printStackTrace(); // Useful for server-side debugging
+            e.printStackTrace();
             sendResponse(exchange, 500, "status=error&message=" + escapeCell(e.getMessage()));
         }
     }
@@ -61,10 +61,10 @@ public class WebViewHotelsHandler implements HttpHandler {
     private List<String> fetchHotelsFromDB(String partnerId) throws SQLException {
         List<String> hotelRows = new ArrayList<>();
         
-        // Fixed: Added 'n' to customization, added missing space, and fixed string concatenation
+        // Updated SQL: Replaced 'rating' with 'avg_rating, total_reviews'
         String sql = "SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, " +
-                     "hotel_location, total_rooms, available_rooms, room_price, amenities, policies, rating, hotel_contact, " +
-                     "about_this_property, hotel_images, customization, status " +
+                     "hotel_location, total_rooms, available_rooms, room_price, amenities, policies, hotel_contact, " +
+                     "about_this_property, hotel_images, customization, status, avg_rating, total_reviews " +
                      "FROM hotels_info WHERE partner_id = ?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -74,8 +74,8 @@ public class WebViewHotelsHandler implements HttpHandler {
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     List<String> cells = new ArrayList<>();
-                    // Explicitly looping 1-22 based on the SELECT order
-                    for (int i = 1; i <= 22; i++) {
+                    // Explicitly looping 1-23 because we now have 23 columns
+                    for (int i = 1; i <= 23; i++) {
                         String val = rs.getString(i);
                         cells.add(escapeCell(val));
                     }
@@ -125,7 +125,6 @@ public class WebViewHotelsHandler implements HttpHandler {
 
     private String escapeCell(String s) {
         if (s == null) return "";
-        // Standardizing special characters to prevent row-breaking in Flutter parsing
         return s.replace("&", "and")
                 .replace("=", ":")
                 .replace("|", "/")

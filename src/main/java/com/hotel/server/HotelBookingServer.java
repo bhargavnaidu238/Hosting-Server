@@ -35,6 +35,7 @@ import com.hotel.web.partner.WebBookingHandler;
 import com.hotel.web.partner.WebDashBoardHandler;
 import com.hotel.web.partner.WebLoginRegisterHandler;
 import com.hotel.web.partner.WebProfileHandler;
+import com.hotel.web.partner.WebReviewsHandler;
 import com.hotel.web.partner.WebViewHotelsHandler;
 import com.hotel.web.partner.WebViewPGsHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -101,17 +102,19 @@ public class HotelBookingServer {
 
         server.createContext("/webviewhotels", new WebViewHotelsHandler(dbConfig));
         server.createContext("/webviewpgs", new WebViewPGsHandler(dbConfig));
-
+        
         server.createContext("/webgetPartnerBookings", new WebBookingHandler(dbConfig));
         server.createContext("/webcancelBooking", new WebBookingHandler(dbConfig));
         server.createContext("/webupdateBookingStatus", new WebBookingHandler(dbConfig));
         server.createContext("/setNotificationViewed", new SetFinanceNotificationViewedHandler(dbConfig));
-
+        server.createContext("/webgetreviews", new WebReviewsHandler(dbConfig));
+        
         // ========== PARTNER FINANCE ==========
         server.createContext("/getPartnerFinance", new GetPartnerFinanceHandler(dbConfig));
         server.createContext("/updateBankDetails", new UpdateBankDetailsHandler(dbConfig));
         server.createContext("/requestPayout", new RequestPayoutHandler(dbConfig));
         server.createContext("/getPartnerTransactions", new GetPartnerTransactionsHandler(dbConfig));
+        
         
      // ========== Notification Service ==========
         server.createContext("/send-email", new EmailHandler(dbConfig));

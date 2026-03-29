@@ -20,10 +20,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
-
 import com.hotel.utilities.DbConfig;
 import com.hotel.server.HotelBookingServer;
 import com.sun.net.httpserver.HttpExchange;
@@ -57,7 +55,6 @@ public class AddHotelsHandler implements HttpHandler {
         }
 
         try {
-            // ✅ Optimization: Read body once
             String body = readRequestBody(exchange);
             Map<String, String> params = parseForm(body);
 
@@ -136,7 +133,8 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean addHotelToDB(String hotelId, Map<String, String> params) throws SQLException {
-        String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, rating, hotel_contact, about_this_property, hotel_images, customization, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        // Updated to include avg_rating and total_reviews for initial insertion
+        String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, avg_rating, total_reviews, hotel_contact, about_this_property, hotel_images, customization, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, true);
@@ -145,7 +143,8 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean updateHotelInDB(String hotelId, Map<String, String> params) throws SQLException {
-        String sql = "UPDATE hotels_info SET hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, rating=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
+        // Updated to exclude avg_rating and total_reviews as they should not be updated by the partner
+        String sql = "UPDATE hotels_info SET hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, false);
@@ -156,6 +155,7 @@ public class AddHotelsHandler implements HttpHandler {
     private void setHotelParams(PreparedStatement stmt, String hotelId, Map<String, String> params, boolean isInsert) throws SQLException {
         int idx = 1;
         if (isInsert) stmt.setString(idx++, hotelId);
+        
         stmt.setString(idx++, params.getOrDefault("partner_id", ""));
         stmt.setString(idx++, params.getOrDefault("hotel_name", ""));
         stmt.setString(idx++, params.getOrDefault("hotel_type", ""));
@@ -171,7 +171,14 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setString(idx++, params.getOrDefault("room_price", ""));
         stmt.setString(idx++, params.getOrDefault("amenities", ""));
         stmt.setString(idx++, params.getOrDefault("policies", ""));
-        stmt.setDouble(idx++, Double.parseDouble(params.getOrDefault("rating", "0.0")));
+
+        // Handle rating logic
+        if (isInsert) {
+            stmt.setDouble(idx++, 0.0); // avg_rating default
+            stmt.setInt(idx++, 0);      // total_reviews default
+        }
+        // If update, we skip these columns to preserve existing user ratings
+
         stmt.setString(idx++, params.getOrDefault("hotel_contact", ""));
         stmt.setString(idx++, params.getOrDefault("about_this_property", ""));
         stmt.setString(idx++, params.get("hotel_images"));
@@ -186,7 +193,6 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private String readRequestBody(HttpExchange exchange) throws IOException {
-        // ✅ Optimization: Large buffer size for massive Base64 strings
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8), 8192)) {
             StringBuilder sb = new StringBuilder();
             char[] buffer = new char[8192];
