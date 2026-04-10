@@ -42,6 +42,7 @@ public class EmailHandler implements HttpHandler {
             String type = body.getOrDefault("type", "").toLowerCase();
             String email = body.getOrDefault("email", "").trim().toLowerCase();
 
+            // ================= REGISTER OTP =================
             if ("send_otp".equals(type)) {
                 if (checkUserExists(email)) {
                     sendResponse(exchange, 409, "{\"status\":\"error\",\"message\":\"Email already exists. Please login.\"}");
@@ -49,15 +50,25 @@ public class EmailHandler implements HttpHandler {
                 }
                 handleSendOtp(exchange, email, "Verification Code", "Your verification OTP is: ");
             } 
+            // ================= FORGOT PASSWORD OTP (WEB) =================
+            // FIX: Added this branch to handle the request coming from weblogin.dart
+            else if ("forgot_password_otp".equals(type)) {
+                if (!checkPartnerExists(email)) {
+                    sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Email not registered.\"}");
+                    return;
+                }
+                handleSendOtp(exchange, email, "Reset Your Password", "You requested to reset your password. Your OTP is: ");
+            }
+            // ================= FORGOT PASSWORD VERIFY (MOBILE) =================
             else if ("forgot_password_verify".equals(type)) {
                 String inputMobile = normalizeMobile(body.getOrDefault("mobile", ""));
                 if (verifyUserAndMobile(email, inputMobile)) {
-                    // Logic: If user and mobile match, trigger the OTP sending process
                     handleSendOtp(exchange, email, "Reset Your Password", "You requested to reset your password. Your OTP is: ");
                 } else {
                     sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Email or mobile number not matching\"}");
                 }
             }
+            // ================= VERIFY OTP (COMMON) =================
             else if ("verify_otp".equals(type)) {
                 String otp = body.getOrDefault("otp", "").trim();
                 handleVerifyOtp(exchange, email, otp);
@@ -72,8 +83,20 @@ public class EmailHandler implements HttpHandler {
     }
 
     /**
-     * Verifies if the email exists and the normalized mobile number matches.
+     * FIX: New helper to verify if a partner exists in the partner_data table
+     * before sending a password reset OTP.
      */
+    private boolean checkPartnerExists(String email) throws SQLException {
+        String query = "SELECT 1 FROM partner_data WHERE LOWER(email) = ?";
+        try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(query)) {
+            pstmt.setString(1, email.toLowerCase());
+            try (ResultSet rs = pstmt.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
     private boolean verifyUserAndMobile(String email, String inputMobile) throws SQLException {
         String query = "SELECT mobile_number FROM user_info WHERE LOWER(user_email) = ? AND status = 'Active'";
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
