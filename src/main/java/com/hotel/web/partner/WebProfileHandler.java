@@ -249,44 +249,84 @@ public class WebProfileHandler implements HttpHandler {
 
     // ================= DELETE PROFILE =================
 
-    private void handleDeleteProfile(HttpExchange exchange,
-                                     Map<String, String> params)
-            throws Exception {
+    private void handleDeleteProfile(HttpExchange exchange, Map<String, String> params) throws Exception {
 
         String email = params.getOrDefault("email", "").trim().toLowerCase();
 
         if (email.isEmpty()) {
-            sendJson(exchange, 400,
-                    Map.of("status", "error",
-                           "message", "Email required"));
+            sendJson(exchange, 400, Map.of("status", "error", "message", "Email required"));
             return;
         }
 
-        String updateQuery =
-                "UPDATE partner_data SET user_status='Inactive' WHERE LOWER(email)=?";
+        // Queries
+        String selectPartnerIdQuery = "SELECT partner_id FROM partner_data WHERE LOWER(email) = ?";
+        String updatePartnerQuery = "UPDATE partner_data SET user_status='Inactive' WHERE LOWER(email) = ?";
+        String updateHotelsQuery = "UPDATE hotels_info SET status='Inactive' WHERE partner_id = ?";
+        String updatePGQuery = "UPDATE paying_guest_info SET status='Inactive' WHERE partner_id = ?";
 
-        try (Connection conn =
-                     dbConfig.getPartnerDataSource().getConnection();
-             PreparedStatement stmt =
-                     conn.prepareStatement(updateQuery)) {
+        try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+            // Start Transaction
+            conn.setAutoCommit(false);
 
-            stmt.setString(1, email);
-            int updated = stmt.executeUpdate();
+            try {
+                String partnerId = null;
 
-            if (updated == 0) {
-                sendJson(exchange, 404,
-                        Map.of("status", "error",
-                               "message", "Partner not found"));
-                return;
+                // 1. Get the partner_id based on email
+                try (PreparedStatement pstmt = conn.prepareStatement(selectPartnerIdQuery)) {
+                    pstmt.setString(1, email);
+                    try (ResultSet rs = pstmt.executeQuery()) {
+                        if (rs.next()) {
+                            partnerId = rs.getString("partner_id");
+                        }
+                    }
+                }
+
+                if (partnerId == null) {
+                    conn.rollback();
+                    sendJson(exchange, 404, Map.of("status", "error", "message", "Partner not found"));
+                    return;
+                }
+
+                // 2. Update partner_data status
+                try (PreparedStatement pstmt = conn.prepareStatement(updatePartnerQuery)) {
+                    pstmt.setString(1, email);
+                    pstmt.executeUpdate();
+                }
+
+                // 3. Update hotels_info
+                try (PreparedStatement pstmt = conn.prepareStatement(updateHotelsQuery)) {
+                    pstmt.setString(1, partnerId);
+                    pstmt.executeUpdate();
+                }
+
+                // 4. Update paying_guest_info
+                try (PreparedStatement pstmt = conn.prepareStatement(updatePGQuery)) {
+                    pstmt.setString(1, partnerId);
+                    pstmt.executeUpdate();
+                }
+
+                // Commit all changes
+                conn.commit();
+
+                sendJson(exchange, 200, Map.of(
+                    "status", "success",
+                    "message", "Account and related listings deactivated successfully",
+                    "logout", true
+                ));
+
+            } catch (Exception e) {
+                // If any error occurs, undo changes
+                conn.rollback();
+                throw e; 
+            } finally {
+                conn.setAutoCommit(true);
             }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            sendJson(exchange, 500, Map.of("status", "error", "message", "Database error: " + e.getMessage()));
         }
-
-        sendJson(exchange, 200,
-                Map.of("status", "success",
-                       "message", "Account deactivated successfully",
-                       "logout", true));
     }
-
     // ================= UTILITIES =================
 
     private void sendJson(HttpExchange exchange,
