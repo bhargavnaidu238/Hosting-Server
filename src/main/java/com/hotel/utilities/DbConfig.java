@@ -23,8 +23,13 @@ public final class DbConfig {
     private final String supabaseurl;
     private final String anonKey;
     
-    private final String emailapiKey;
-    private final String senderemailaddress;
+    // ===== EMAIL (ZOHO SMTP) =====
+    private final String smtpHost;
+    private final String smtpPort;
+    private final String smtpUsername;
+    private final String smtpPassword;
+    private final String senderEmail;
+    private final String senderName;
 
     // ===== Lazy DataSources =====
     private volatile HikariDataSource customerDataSource;
@@ -46,11 +51,17 @@ public final class DbConfig {
         this.apiKeySecret  = getEnv("PAYMENT_API_SECRET");
         this.webHookSecret = getOptionalEnv("PAYMENT_WEBHOOK_SECRET");
         
-        this.supabaseurl        = getEnv("SUPABASE_URL");
-        this.anonKey  = getEnv("ANON_KEY");
-        
-        this.emailapiKey        = getEnv("EMAIL_NOTIFICATION_API");
-        this.senderemailaddress  = getEnv("SENDER_EMAIL");
+        this.supabaseurl = getEnv("SUPABASE_URL");
+        this.anonKey     = getEnv("ANON_KEY");
+
+        // ===== ZOHO SMTP ENV =====
+        this.smtpHost     = getEnv("SMTP_HOST");
+        this.smtpPort     = getEnv("SMTP_PORT");
+        this.smtpUsername = getEnv("SMTP_USERNAME");
+        this.smtpPassword = getEnv("SMTP_PASSWORD");
+
+        this.senderEmail = getEnv("SENDER_EMAIL");
+        this.senderName  = getOptionalEnv("SENDER_NAME"); // optional
 
         System.out.println("DB CONFIG LOADED");
         System.out.println("CUSTOMER_DB_URL = " + customerDbUrl);
@@ -97,20 +108,15 @@ public final class DbConfig {
         config.setPassword(password);
         config.setDriverClassName("org.postgresql.Driver");
 
-        // ===== IMPORTANT FIX =====
-        // Disable PostgreSQL server-side prepared statements
         config.addDataSourceProperty("prepareThreshold", "0");
 
-        // ===== Pool Settings (Render Safe) =====
         config.setMaximumPoolSize(3);
         config.setMinimumIdle(1);
         config.setConnectionTimeout(30000);
         config.setIdleTimeout(600000);
         config.setMaxLifetime(1800000);
 
-        // Detect connection leaks (optional but useful)
         config.setLeakDetectionThreshold(30000);
-
         config.setInitializationFailTimeout(10000);
 
         return new HikariDataSource(config);
@@ -123,7 +129,6 @@ public final class DbConfig {
             throw new IllegalStateException("JDBC URL is missing");
         }
 
-        // Ensure sslmode=require (Render requirement)
         if (!url.contains("sslmode=")) {
             if (url.contains("?")) {
                 url = url + "&sslmode=require";
@@ -177,13 +182,30 @@ public final class DbConfig {
     public String getAnonKey() {
         return anonKey;
     }
-    
-    public String getEmailApiKey() {
-        return emailapiKey;
+
+    // ===== EMAIL GETTERS =====
+    public String getSmtpHost() {
+        return smtpHost;
+    }
+
+    public String getSmtpPort() {
+        return smtpPort;
+    }
+
+    public String getSmtpUsername() {
+        return smtpUsername;
+    }
+
+    public String getSmtpPassword() {
+        return smtpPassword;
     }
 
     public String getSenderEmail() {
-        return senderemailaddress;
+        return senderEmail;
+    }
+
+    public String getSenderName() {
+        return senderName;
     }
 
     // ===== Shutdown =====

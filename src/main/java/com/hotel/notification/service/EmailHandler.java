@@ -4,11 +4,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hotel.utilities.DbConfig;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import jakarta.mail.*;
+import jakarta.mail.internet.InternetAddress;
+import jakarta.mail.internet.MimeMessage;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.sql.*;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Random;
 
 public class EmailHandler implements HttpHandler {
@@ -22,7 +26,7 @@ public class EmailHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // CORS Headers
+
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -38,11 +42,11 @@ public class EmailHandler implements HttpHandler {
         }
 
         try (InputStream is = exchange.getRequestBody()) {
+
             Map<String, String> body = mapper.readValue(is, Map.class);
             String type = body.getOrDefault("type", "").toLowerCase();
             String email = body.getOrDefault("email", "").trim().toLowerCase();
 
-            // ================= REGISTER OTP =================
             if ("send_otp".equals(type)) {
                 if (checkUserExists(email)) {
                     sendResponse(exchange, 409, "{\"status\":\"error\",\"message\":\"Email already exists. Please login.\"}");
@@ -50,8 +54,6 @@ public class EmailHandler implements HttpHandler {
                 }
                 handleSendOtp(exchange, email, "Verification Code", "Your verification OTP is: ");
             } 
-            // ================= FORGOT PASSWORD OTP (WEB) =================
-            // FIX: Added this branch to handle the request coming from weblogin.dart
             else if ("forgot_password_otp".equals(type)) {
                 if (!checkPartnerExists(email)) {
                     sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Email not registered.\"}");
@@ -59,7 +61,6 @@ public class EmailHandler implements HttpHandler {
                 }
                 handleSendOtp(exchange, email, "Reset Your Password", "You requested to reset your password. Your OTP is: ");
             }
-            // ================= FORGOT PASSWORD VERIFY (MOBILE) =================
             else if ("forgot_password_verify".equals(type)) {
                 String inputMobile = normalizeMobile(body.getOrDefault("mobile", ""));
                 if (verifyUserAndMobile(email, inputMobile)) {
@@ -68,7 +69,6 @@ public class EmailHandler implements HttpHandler {
                     sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"Email or mobile number not matching\"}");
                 }
             }
-            // ================= VERIFY OTP (COMMON) =================
             else if ("verify_otp".equals(type)) {
                 String otp = body.getOrDefault("otp", "").trim();
                 handleVerifyOtp(exchange, email, otp);
@@ -76,16 +76,13 @@ public class EmailHandler implements HttpHandler {
             else {
                 sendResponse(exchange, 400, "{\"status\":\"error\",\"message\":\"Invalid type\"}");
             }
+
         } catch (Exception e) {
             e.printStackTrace();
             sendResponse(exchange, 500, "{\"status\":\"error\",\"message\":\"Internal Server Error\"}");
         }
     }
 
-    /**
-     * FIX: New helper to verify if a partner exists in the partner_data table
-     * before sending a password reset OTP.
-     */
     private boolean checkPartnerExists(String email) throws SQLException {
         String query = "SELECT 1 FROM partner_data WHERE LOWER(email) = ?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
@@ -124,39 +121,82 @@ public class EmailHandler implements HttpHandler {
     }
 
     private void handleSendOtp(HttpExchange exchange, String email, String subject, String prefix) throws Exception {
+
         String otp = String.valueOf(new Random().nextInt(900000) + 100000);
-        Timestamp expiry = new Timestamp(System.currentTimeMillis() + (2 * 60 * 1000)); 
+        Timestamp expiry = new Timestamp(System.currentTimeMillis() + (2 * 60 * 1000));
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+
             String query = "INSERT INTO email_verification_otp (email, otp_code, otp_expiry, attempts) " +
-                           "VALUES (?, ?, ?, 1) " +
-                           "ON CONFLICT (email) DO UPDATE SET " +
-                           "otp_code = EXCLUDED.otp_code, " +
-                           "otp_expiry = EXCLUDED.otp_expiry, " +
-                           "attempts = email_verification_otp.attempts + 1";
+                    "VALUES (?, ?, ?, 1) " +
+                    "ON CONFLICT (email) DO UPDATE SET " +
+                    "otp_code = EXCLUDED.otp_code, " +
+                    "otp_expiry = EXCLUDED.otp_expiry, " +
+                    "attempts = email_verification_otp.attempts + 1";
 
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
-                stmt.setString(1, email.toLowerCase());
+                stmt.setString(1, email);
                 stmt.setString(2, otp);
                 stmt.setTimestamp(3, expiry);
                 stmt.executeUpdate();
             }
         }
 
-        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
         String bodyText = prefix + otp + "\n\nThis code expires in 2 minutes.\n\nRegards,\nHotel Booking Team";
-        emailService.sendEmail(email, subject, bodyText);
+
+        sendEmail(email, subject, bodyText);
 
         sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP sent to email\"}");
     }
 
+    // ✅ FIXED SMTP METHOD
+    private void sendEmail(String to, String subject, String bodyText) throws Exception {
+
+        Properties props = new Properties();
+        props.put("mail.smtp.host", dbConfig.getSmtpHost());
+        props.put("mail.smtp.port", dbConfig.getSmtpPort());
+        props.put("mail.smtp.auth", "true");
+        props.put("mail.smtp.starttls.enable", "true");
+
+        Session session = Session.getInstance(props, new Authenticator() {
+            protected PasswordAuthentication getPasswordAuthentication() {
+                return new PasswordAuthentication(
+                        dbConfig.getSmtpUsername(),
+                        dbConfig.getSmtpPassword()
+                );
+            }
+        });
+
+        Message message = new MimeMessage(session);
+
+        message.setFrom(new InternetAddress(
+                dbConfig.getSenderEmail(),
+                dbConfig.getSenderName() != null ? dbConfig.getSenderName() : ""
+        ));
+
+        message.setRecipients(Message.RecipientType.TO,
+                InternetAddress.parse(to));
+
+        message.setSubject(subject);
+        message.setText(bodyText);
+
+        Transport.send(message);
+    }
+
     private void handleVerifyOtp(HttpExchange exchange, String email, String userOtp) throws Exception {
+
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
+
             String query = "SELECT otp_code, otp_expiry, attempts FROM email_verification_otp WHERE LOWER(email) = ?";
+
             try (PreparedStatement stmt = conn.prepareStatement(query)) {
+
                 stmt.setString(1, email.toLowerCase());
+
                 try (ResultSet rs = stmt.executeQuery()) {
+
                     if (rs.next()) {
+
                         String storedOtp = rs.getString("otp_code").trim();
                         Timestamp expiry = rs.getTimestamp("otp_expiry");
                         int attempts = rs.getInt("attempts");
@@ -170,6 +210,7 @@ public class EmailHandler implements HttpHandler {
                         } else {
                             sendResponse(exchange, 401, "{\"status\":\"error\",\"message\":\"Enter Wrong OTP Please try again.\"}");
                         }
+
                     } else {
                         sendResponse(exchange, 404, "{\"status\":\"error\",\"message\":\"No OTP session found\"}");
                     }

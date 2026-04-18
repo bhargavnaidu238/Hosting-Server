@@ -196,7 +196,7 @@ public class BookingHandler implements HttpHandler {
 
             new Thread(() -> {
                 try {
-                    EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                	EmailService emailService = new EmailService(dbConfig);
                     
                     // 1. Notify Customer
                     String customerSubject = "Booking Confirmed - " + fHotelName;

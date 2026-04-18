@@ -1,61 +1,75 @@
 package com.hotel.notification.service;
 
+import com.hotel.utilities.DbConfig;
+
+// ✅ Jakarta Mail imports (make sure dependency is added)
+import jakarta.mail.*;
+import jakarta.mail.internet.InternetAddress;
+import jakarta.mail.internet.MimeMessage;
+
 import java.io.IOException;
-import com.sendgrid.Method;
-import com.sendgrid.Request;
-import com.sendgrid.Response;
-import com.sendgrid.SendGrid;
-import com.sendgrid.helpers.mail.Mail;
-import com.sendgrid.helpers.mail.objects.Content;
-import com.sendgrid.helpers.mail.objects.Email;
+import java.util.Properties;
 
 public class EmailService {
 
-    private final String senderEmail;
-    private final SendGrid sendGrid;
-	private String apiKey;
+    private final DbConfig dbConfig;
 
-    public EmailService(String apiKey, String senderEmail) {
-        if (apiKey == null || apiKey.isEmpty() || senderEmail == null || senderEmail.isEmpty()) {
-            throw new RuntimeException("Email configuration (API Key or Sender) is missing!");
+    // ✅ Updated constructor (no API key needed)
+    public EmailService(DbConfig dbConfig) {
+        if (dbConfig == null) {
+            throw new RuntimeException("DbConfig is required for EmailService!");
         }
-        this.apiKey = apiKey;
-        this.senderEmail = senderEmail;
-        this.sendGrid = new SendGrid(apiKey);
+        this.dbConfig = dbConfig;
     }
 
     /**
-     * Sends an email using SendGrid.
-     * Supports both plain text and HTML if needed.
+     * Sends email using Zoho SMTP
      */
     public void sendEmail(String recipientEmail, String subject, String body) throws IOException {
-        Email from = new Email(senderEmail);
-        Email to = new Email(recipientEmail);
-        
-        // Use text/html if you want to send styled emails later, otherwise text/plain is fine.
-        Content content = new Content("text/plain", body);
-        Mail mail = new Mail(from, subject, to, content);
 
-        Request request = new Request();
         try {
-            request.setMethod(Method.POST);
-            request.setEndpoint("mail/send");
-            request.setBody(mail.build());
+            Properties props = new Properties();
+            props.put("mail.smtp.host", dbConfig.getSmtpHost());
+            props.put("mail.smtp.port", dbConfig.getSmtpPort());
+            props.put("mail.smtp.auth", "true");
+            props.put("mail.smtp.starttls.enable", "true");
 
-            Response response = sendGrid.api(request);
+            Session session = Session.getInstance(props, new Authenticator() {
+                protected PasswordAuthentication getPasswordAuthentication() {
+                    return new PasswordAuthentication(
+                            dbConfig.getSmtpUsername(),
+                            dbConfig.getSmtpPassword()
+                    );
+                }
+            });
 
-            // SendGrid success code for "Accepted" is 202
-            if (response.getStatusCode() >= 200 && response.getStatusCode() < 300) {
-                System.out.println("[EmailService] Success: Email sent to " + recipientEmail + 
-                                   " (Status: " + response.getStatusCode() + ")");
+            Message message = new MimeMessage(session);
+
+            // ✅ Sender with name (fallback safe)
+            if (dbConfig.getSenderName() != null && !dbConfig.getSenderName().isEmpty()) {
+                message.setFrom(new InternetAddress(
+                        dbConfig.getSenderEmail(),
+                        dbConfig.getSenderName()
+                ));
             } else {
-                // IMPORTANT: Throwing an exception so the Handler knows it failed
-                throw new IOException("SendGrid failure. Status: " + response.getStatusCode() + 
-                                      " Body: " + response.getBody());
+                message.setFrom(new InternetAddress(dbConfig.getSenderEmail()));
             }
-        } catch (IOException ex) {
+
+            message.setRecipients(Message.RecipientType.TO,
+                    InternetAddress.parse(recipientEmail));
+
+            message.setSubject(subject);
+
+            // You can switch to "text/html" later if needed
+            message.setText(body);
+
+            Transport.send(message);
+
+            System.out.println("[EmailService] Success: Email sent to " + recipientEmail);
+
+        } catch (Exception ex) {
             System.err.println("[EmailService] Error sending email: " + ex.getMessage());
-            throw ex;
+            throw new IOException("SMTP Email failed: " + ex.getMessage(), ex);
         }
     }
 }

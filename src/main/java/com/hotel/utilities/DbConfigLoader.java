@@ -34,8 +34,34 @@ public class DbConfigLoader {
         String supabaseAnonKey   = props.getProperty("anonKey");
         
         // ====== Send Email Notifcation Storage AI Keys ===============
-        String emailApiKey      = props.getProperty("emailapiKey");
-        String senderEmailAddress   = props.getProperty("senderemailaddress");
+               
+        String smtpHost      = props.getProperty("smtpHost");
+        String smtpPort   = props.getProperty("smtpPort");
+        String smtpUsername      = props.getProperty("smtpUsername");
+        String smtpPassword   = props.getProperty("smtpPassword");
+        String senderEmail      = props.getProperty("emailapiKey");
+        String senderName   = props.getProperty("senderName");
+        
+ // ===== Validate Email Notification API Key properties =====
+        
+        if (smtpHost == null || smtpHost.isBlank()) {
+            throw new IllegalStateException("Missing property: smtpHost");
+        }
+        if (smtpPort == null || smtpPort.isBlank()) {
+            throw new IllegalStateException("Missing property: smtpPort");
+        }
+        if (smtpUsername == null || smtpUsername.isBlank()) {
+            throw new IllegalStateException("Missing property: smtpUsername");
+        }
+        if (smtpPassword == null || smtpPassword.isBlank()) {
+            throw new IllegalStateException("Missing property: smtpPassword");
+        }
+        if (senderEmail == null || senderEmail.isBlank()) {
+            throw new IllegalStateException("Missing property: senderEmail");
+        }
+        if (senderName == null || senderName.isBlank()) {
+            throw new IllegalStateException("Missing property: senderName");
+        }
         
         // ===== Payment API properties =====
         String apiKey      = props.getProperty("db.apikey");
@@ -69,15 +95,6 @@ public class DbConfigLoader {
         }
         if (supabaseAnonKey == null || supabaseAnonKey.isBlank()) {
             throw new IllegalStateException("Missing property: anonKey");
-        }
-        
-     // ===== Validate Email Notification API Key properties =====
-        
-        if (emailApiKey == null || emailApiKey.isBlank()) {
-            throw new IllegalStateException("Missing property: emailApiKey");
-        }
-        if (senderEmailAddress == null || senderEmailAddress.isBlank()) {
-            throw new IllegalStateException("Missing property: senderEmailAddress");
         }
         
         // ===== Validate Payment API Key properties =====

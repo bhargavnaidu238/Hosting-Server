@@ -132,7 +132,7 @@ public class RegisterHandler implements HttpHandler {
             String fullName = (firstName + " " + lastName).trim();
             new Thread(() -> {
                 try {
-                    EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                	EmailService emailService = new EmailService(dbConfig);
                     String subject = "Welcome to Hotel Booking";
                     String welcomeBody = "Hello " + fullName + ",\n\n" +
                                         "Your registration is successful.\n" +
