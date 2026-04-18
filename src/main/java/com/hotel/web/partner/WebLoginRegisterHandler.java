@@ -318,7 +318,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                  * =============================== */
                 new Thread(() -> {
                     try {
-                        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                    	EmailService emailService = new EmailService(dbConfig);
                         String subject = "Welcome to Hotel Booking Partner Portal";
                         String body = "Hello " + partnerName + ",\n\nYour registration is successful. ID: " + uniqueID;
                         emailService.sendEmail(email, subject, body);
@@ -407,7 +407,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                  */
                 new Thread(() -> {
                     try {
-                        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                    	EmailService emailService = new EmailService(dbConfig);
                         String subject = "Security Alert: Password Changed";
                         String body = "Hello,\n\nThis is a confirmation that your password for the Partner Portal was successfully changed.\n\n"
                                     + "If you did not perform this action, please contact support immediately.\n\n"

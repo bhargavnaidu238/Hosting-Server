@@ -148,7 +148,7 @@ public class RequestPayoutHandler implements HttpHandler {
 
                         System.out.println("[EmailService] Dispatching payout notification to: " + email);
 
-                        EmailService emailService = new EmailService(dbConfig.getEmailApiKey(), dbConfig.getSenderEmail());
+                        EmailService emailService = new EmailService(dbConfig);
                         String subject = "Payout Request Received - " + txId;
                         String body = "Hello " + name + ",\n\n" +
                                      "Your payout request has been successfully submitted.\n\n" +
