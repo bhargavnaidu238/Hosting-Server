@@ -15,7 +15,6 @@ public class UpdateBankDetailsHandler implements HttpHandler {
         this.dbConfig = dbConfig;
     }
 
-    // Normalized sets for internal validation
     private static final Set<String> VALID_PAYOUT_TYPES =
             Set.of("daily", "weekly", "fortnight", "monthly", "quarterly");
 
@@ -25,7 +24,6 @@ public class UpdateBankDetailsHandler implements HttpHandler {
     @Override
     public void handle(HttpExchange exchange) throws IOException {
 
-        // CORS Setup
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");

@@ -61,7 +61,6 @@ public class WebLoginRegisterHandler implements HttpHandler {
                 handleLogin(exchange, params);
             } 
             else if (path.endsWith("/registerlogin")) {
-                // This is where the registration happens
                 handleRegister(exchange, params);
             } 
             else {
@@ -221,9 +220,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
             conn.setAutoCommit(false);
 
             try {
-                /* ===============================
-                 * 1. VERIFY OTP
-                 * =============================== */
+                 //================= 1. VERIFY OTP================================
                 String otpQuery = "SELECT otp_code, attempts, otp_expiry FROM email_verification_otp WHERE email = ?";
                 try (PreparedStatement otpStmt = conn.prepareStatement(otpQuery)) {
                     otpStmt.setString(1, email);
@@ -260,9 +257,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     }
                 }
 
-                /* ===============================
-                 * 2. CHECK IF EMAIL EXISTS
-                 * =============================== */
+                /* =============================== 2. CHECK IF EMAIL EXISTS =============================== */
                 String checkQuery = "SELECT partner_id FROM partner_data WHERE LOWER(email)=?";
                 try (PreparedStatement checkStmt = conn.prepareStatement(checkQuery)) {
                     checkStmt.setString(1, email);
@@ -274,9 +269,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     }
                 }
 
-                /* ===============================
-                 * 3. INSERT USER
-                 * =============================== */
+                /* =============================== 3. INSERT USER =============================== */
                 String uniqueID = "PR" + (new Random().nextInt(90000) + 10000);
                 Timestamp registrationDate = new Timestamp(System.currentTimeMillis());
 
@@ -302,9 +295,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     insertStmt.executeUpdate();
                 }
 
-                /* ===============================
-                 * 4. CLEANUP OTP
-                 * =============================== */
+                /* =============================== 4. CLEANUP OTP =============================== */
                 String deleteOtp = "DELETE FROM email_verification_otp WHERE email=?";
                 try (PreparedStatement deleteStmt = conn.prepareStatement(deleteOtp)) {
                     deleteStmt.setString(1, email);
@@ -313,9 +304,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
 
                 conn.commit();
 
-                /* ===============================
-                 * 5. ASYNC EMAIL TRIGGER
-                 * =============================== */
+                /* =============================== 5. ASYNC EMAIL TRIGGER =============================== */
                 new Thread(() -> {
                     try {
                     	EmailService emailService = new EmailService(dbConfig);
@@ -335,8 +324,6 @@ public class WebLoginRegisterHandler implements HttpHandler {
             }
         }
     }
-
-    // Helper method to ensure capitalization doesn't crash on null
     private String capitalize(String str) {
         if (str == null || str.trim().isEmpty()) return "";
         return str.substring(0, 1).toUpperCase() + str.substring(1).toLowerCase();
@@ -409,7 +396,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     try {
                     	EmailService emailService = new EmailService(dbConfig);
                         String subject = "Security Alert: Password Changed";
-                        String body = "Hello,\n\nThis is a confirmation that your password for the Partner Portal was successfully changed.\n\n"
+                        String body = "Hello,\n\nThis is a confirmation that your password for the Flemingo Stays Partner Portal was successfully changed.\n\n"
                                     + "If you did not perform this action, please contact support immediately.\n\n"
                                     + "Regards,\nHotel Booking Team";
                         emailService.sendEmail(email, subject, body);

@@ -115,7 +115,6 @@ public class WebProfileHandler implements HttpHandler {
     }
 
     // ================= UPDATE PROFILE =================
-
     private void handleUpdateProfile(HttpExchange exchange,
                                      Map<String, String> params)
             throws Exception {
@@ -182,7 +181,6 @@ public class WebProfileHandler implements HttpHandler {
     }
 
     // ================= CHANGE PASSWORD =================
-
     private void handleChangePassword(HttpExchange exchange,
                                       Map<String, String> params)
             throws Exception {
@@ -248,7 +246,6 @@ public class WebProfileHandler implements HttpHandler {
     }
 
     // ================= DELETE PROFILE =================
-
     private void handleDeleteProfile(HttpExchange exchange, Map<String, String> params) throws Exception {
 
         String email = params.getOrDefault("email", "").trim().toLowerCase();
@@ -265,13 +262,11 @@ public class WebProfileHandler implements HttpHandler {
         String updatePGQuery = "UPDATE paying_guest_info SET status='Inactive' WHERE partner_id = ?";
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection()) {
-            // Start Transaction
             conn.setAutoCommit(false);
 
             try {
                 String partnerId = null;
 
-                // 1. Get the partner_id based on email
                 try (PreparedStatement pstmt = conn.prepareStatement(selectPartnerIdQuery)) {
                     pstmt.setString(1, email);
                     try (ResultSet rs = pstmt.executeQuery()) {
@@ -287,25 +282,21 @@ public class WebProfileHandler implements HttpHandler {
                     return;
                 }
 
-                // 2. Update partner_data status
                 try (PreparedStatement pstmt = conn.prepareStatement(updatePartnerQuery)) {
                     pstmt.setString(1, email);
                     pstmt.executeUpdate();
                 }
 
-                // 3. Update hotels_info
                 try (PreparedStatement pstmt = conn.prepareStatement(updateHotelsQuery)) {
                     pstmt.setString(1, partnerId);
                     pstmt.executeUpdate();
                 }
 
-                // 4. Update paying_guest_info
-                try (PreparedStatement pstmt = conn.prepareStatement(updatePGQuery)) {
+                 try (PreparedStatement pstmt = conn.prepareStatement(updatePGQuery)) {
                     pstmt.setString(1, partnerId);
                     pstmt.executeUpdate();
                 }
 
-                // Commit all changes
                 conn.commit();
 
                 sendJson(exchange, 200, Map.of(
@@ -315,8 +306,7 @@ public class WebProfileHandler implements HttpHandler {
                 ));
 
             } catch (Exception e) {
-                // If any error occurs, undo changes
-                conn.rollback();
+                 conn.rollback();
                 throw e; 
             } finally {
                 conn.setAutoCommit(true);
@@ -327,8 +317,8 @@ public class WebProfileHandler implements HttpHandler {
             sendJson(exchange, 500, Map.of("status", "error", "message", "Database error: " + e.getMessage()));
         }
     }
+    
     // ================= UTILITIES =================
-
     private void sendJson(HttpExchange exchange,
                           int statusCode,
                           Object response) throws IOException {

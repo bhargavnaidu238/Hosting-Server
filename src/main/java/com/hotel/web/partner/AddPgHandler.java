@@ -24,7 +24,6 @@ public class AddPgHandler implements HttpHandler {
     @Override
     public void handle(HttpExchange exchange) throws IOException {
 
-        // ✅ CORS HEADERS
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
@@ -55,9 +54,7 @@ public class AddPgHandler implements HttpHandler {
             return;
         }
 
-        // ===============================
         // ✅ IMAGE HANDLING
-        // ===============================
         try {
             String pgId = params.getOrDefault("pg_id", "").trim();
             if (pgId.isEmpty()) {
@@ -102,9 +99,7 @@ public class AddPgHandler implements HttpHandler {
             System.err.println("Image processing error: " + e.getMessage());
         }
 
-        // ===============================
-        // UPSERT LOGIC
-        // ===============================
+        //================ UPSERT LOGIC ================
         String pgId = params.get("pg_id");
         boolean isUpdate = pgExists(pgId);
 
@@ -136,7 +131,6 @@ public class AddPgHandler implements HttpHandler {
     }
 
     private boolean addPGToDB(String pgId, Map<String, String> params) throws SQLException {
-        // Updated: Removed 'rating', added 'avg_rating' and 'total_reviews'
         String sql = "INSERT INTO paying_guest_info (pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, room_price, amenities, policies, avg_rating, total_reviews, pg_contact, about_this_pg, pg_images, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::pg_status_enum)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -146,7 +140,6 @@ public class AddPgHandler implements HttpHandler {
     }
 
     private boolean updatePGInDB(String pgId, Map<String, String> params) throws SQLException {
-        // Updated: Removed 'rating', added 'avg_rating' and 'total_reviews'
         String sql = "UPDATE paying_guest_info SET partner_id=?, pg_name=?, pg_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, total_single_sharing_rooms=?, total_double_sharing_rooms=?, total_three_sharing_rooms=?, total_four_sharing_rooms=?, total_five_sharing_rooms=?, hotel_location=?, available_rooms=?, room_price=?, amenities=?, policies=?, avg_rating=?, total_reviews=?, pg_contact=?, about_this_pg=?, pg_images=?, status=?::pg_status_enum WHERE pg_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
