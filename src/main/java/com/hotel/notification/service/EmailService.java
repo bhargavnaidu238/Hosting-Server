@@ -14,7 +14,6 @@ public class EmailService {
 
     private final DbConfig dbConfig;
 
-    // ✅ Updated constructor (no API key needed)
     public EmailService(DbConfig dbConfig) {
         if (dbConfig == null) {
             throw new RuntimeException("DbConfig is required for EmailService!");
@@ -22,9 +21,8 @@ public class EmailService {
         this.dbConfig = dbConfig;
     }
 
-    /**
-     * Sends email using Zoho SMTP
-     */
+    
+    //============== Sends email using Zoho SMTP ======================
     public void sendEmail(String recipientEmail, String subject, String body) throws IOException {
 
         try {
@@ -45,7 +43,6 @@ public class EmailService {
 
             Message message = new MimeMessage(session);
 
-            // ✅ Sender with name (fallback safe)
             if (dbConfig.getSenderName() != null && !dbConfig.getSenderName().isEmpty()) {
                 message.setFrom(new InternetAddress(
                         dbConfig.getSenderEmail(),
@@ -60,7 +57,6 @@ public class EmailService {
 
             message.setSubject(subject);
 
-            // You can switch to "text/html" later if needed
             message.setText(body);
 
             Transport.send(message);

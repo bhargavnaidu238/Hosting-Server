@@ -21,7 +21,6 @@ public class WebReviewHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // Add CORS Headers
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
@@ -88,7 +87,6 @@ public class WebReviewHandler implements HttpHandler {
     private JSONArray fetchPartnerReviews(String email) throws SQLException {
         JSONArray reviewList = new JSONArray();
 
-        // SQL: Join with user_info and use COALESCE to safely handle NULL names
         String query = "SELECT r.review_id, r.rating, r.comment, r.created_at, r.user_id, r.hotel_id, " +
                        "(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) AS user_name, " +
                        "COALESCE(h.Hotel_Name, p.pg_name) AS property_name, " +

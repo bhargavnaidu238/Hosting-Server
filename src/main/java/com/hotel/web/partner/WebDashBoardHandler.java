@@ -36,8 +36,6 @@ public class WebDashBoardHandler implements HttpHandler {
 
         String path = exchange.getRequestURI().getPath();
         String[] parts = path.split("/");
-
-        // Safe partnerId extraction
         String partnerId = null;
 
         for (int i = 0; i < parts.length; i++) {
@@ -104,11 +102,6 @@ public class WebDashBoardHandler implements HttpHandler {
     // ======================= BOOKING STATS (FIXED) =======================
 
     private BookingData getBookingStats(String partnerId) throws Exception {
-
-        /* FIX: We cast booking_status to ::TEXT. 
-           This prevents the 'function upper(booking_status_enum) does not exist' error
-           if the driver or database tries to perform string operations.
-        */
         String sql =
                 """
                 SELECT

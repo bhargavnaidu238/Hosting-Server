@@ -34,9 +34,7 @@ public class HotelImagesHandler implements HttpHandler {
             return;
         }
 
-        // ======================================================
         // ================= SUPABASE CONFIG ====================
-        // ======================================================
         if ("/config".equalsIgnoreCase(path)) {
             String jsonResponse = "{"
                     + "\"supabaseUrl\":\"" + dbConfig.getSupabaseUrl() + "\","
@@ -53,9 +51,7 @@ public class HotelImagesHandler implements HttpHandler {
             return;
         }
 
-        // ======================================================
         // ================= SUPABASE IMAGE UPLOAD ==============
-        // ======================================================
         if (path.startsWith("/upload") && "POST".equalsIgnoreCase(method)) {
 
             String supabaseUrl = System.getenv("SUPABASE_URL");
@@ -66,8 +62,6 @@ public class HotelImagesHandler implements HttpHandler {
                 exchange.sendResponseHeaders(500, -1);
                 return;
             }
-
-            // Normalize URL
             if (supabaseUrl.endsWith("/")) {
                 supabaseUrl = supabaseUrl.substring(0, supabaseUrl.length() - 1);
             }
@@ -75,7 +69,6 @@ public class HotelImagesHandler implements HttpHandler {
             byte[] imageBytes = exchange.getRequestBody().readAllBytes();
             String fileName = UUID.randomUUID() + ".jpg";
 
-            // ✅ Updated bucket name to 'hotels' to match current setup
             String bucketName = "hotels";
 
             String uploadUrl = supabaseUrl + "/storage/v1/object/" + bucketName + "/" + fileName;
@@ -107,7 +100,6 @@ public class HotelImagesHandler implements HttpHandler {
                     os.write(resp);
                 }
             } else {
-                // Read error message from Supabase for debugging in Render logs
                 try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getErrorStream()))) {
                     StringBuilder errorResponse = new StringBuilder();
                     String line;
@@ -119,10 +111,7 @@ public class HotelImagesHandler implements HttpHandler {
             return;
         }
 
-        // ======================================================
         // ================= LOCAL IMAGE SERVING (LEGACY) =======
-        // ======================================================
-
         if (!"GET".equalsIgnoreCase(method)) {
             exchange.sendResponseHeaders(405, -1);
             return;
@@ -162,8 +151,6 @@ public class HotelImagesHandler implements HttpHandler {
             }
             return;
         }
-
-        // If no paths match
         exchange.sendResponseHeaders(404, -1);
     }
 }

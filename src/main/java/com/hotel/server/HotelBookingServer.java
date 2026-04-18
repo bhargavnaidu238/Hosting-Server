@@ -138,7 +138,7 @@ public class HotelBookingServer {
     }
 
     /**
-     * ✅ SHARED SUPABASE UPLOAD LOGIC
+     * SHARED SUPABASE UPLOAD LOGIC
      * Refined to handle Supabase Storage API v1 requirements.
      */
     public static String uploadToSupabase(byte[] imageBytes, String fileName) throws Exception {

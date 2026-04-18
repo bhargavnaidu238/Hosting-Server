@@ -18,7 +18,7 @@ public class WebViewHotelsHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // CORS headers
+       
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
@@ -38,13 +38,11 @@ public class WebViewHotelsHandler implements HttpHandler {
 
         try {
             if (params.containsKey("hotel_ids")) {
-                // Delete multiple hotels
                 String idsStr = params.get("hotel_ids");
                 List<String> hotelIds = Arrays.asList(idsStr.split(","));
                 deleteHotelsFromDB(hotelIds);
                 sendResponse(exchange, 200, "status=success&message=Hotels deleted successfully");
             } else if (params.containsKey("partner_id")) {
-                // Fetch hotels
                 String partnerId = params.get("partner_id");
                 List<String> hotelRows = fetchHotelsFromDB(partnerId);
                 String response = "status=success&data=" + String.join("\n", hotelRows);
@@ -61,7 +59,6 @@ public class WebViewHotelsHandler implements HttpHandler {
     private List<String> fetchHotelsFromDB(String partnerId) throws SQLException {
         List<String> hotelRows = new ArrayList<>();
         
-        // Updated SQL: Replaced 'rating' with 'avg_rating, total_reviews'
         String sql = "SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, " +
                      "hotel_location, total_rooms, available_rooms, room_price, amenities, policies, hotel_contact, " +
                      "about_this_property, hotel_images, customization, status, avg_rating, total_reviews " +
