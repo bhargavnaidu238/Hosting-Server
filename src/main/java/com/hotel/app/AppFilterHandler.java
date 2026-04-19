@@ -72,14 +72,13 @@ public class AppFilterHandler implements HttpHandler {
 
         String requestedType = filters.optString("type", "All");
 
-        // Logic Fix: Only query the relevant table based on the requested category
+        // Logic Fix: Identify if this is a PG request
         boolean isPgRequest = requestedType.toLowerCase().contains("pg") || requestedType.equalsIgnoreCase("Paying Guest");
 
         if (isPgRequest) {
-            // Fetch strictly from PG table
-            combined.putAll(getFilteredData("paying_guest_info", "pg_name", "pg_type", "room_price", filters, sortBy));
+            // FIX: Pass null for typeCol so we don't try to filter by "pg_type = 'paying guest'"
+            combined.putAll(getFilteredData("paying_guest_info", "pg_name", null, "room_price", filters, sortBy));
         } else {
-            // Fetch strictly from Hotels table
             combined.putAll(getFilteredData("hotels_info", "hotel_name", "hotel_type", "room_price", filters, sortBy));
         }
 
@@ -92,8 +91,9 @@ public class AppFilterHandler implements HttpHandler {
         
         double uLat = filters.optDouble("lat", 0);
         double uLng = filters.optDouble("lng", 0);
-        double radius = filters.optDouble("radius", 0); 
-        boolean nearbySearch = (uLat != 0 && uLng != 0 && radius > 0);
+        // Default radius to 20 if lat/lng are present but radius is missing
+        double radius = filters.optDouble("radius", 20); 
+        boolean nearbySearch = (uLat != 0 && uLng != 0);
 
         StringBuilder query = new StringBuilder("SELECT *");
         
@@ -108,10 +108,13 @@ public class AppFilterHandler implements HttpHandler {
         }
 
         // 1. STRICT CATEGORY FILTERING logic
-        String requestedType = filters.optString("type", "All");
-        if (!requestedType.equalsIgnoreCase("All")) {
-            query.append(" AND LOWER(").append(typeCol).append(") = ?");
-            params.add(requestedType.toLowerCase());
+        // FIX: Only apply this if typeCol is NOT NULL (Hotels)
+        if (typeCol != null) {
+            String requestedType = filters.optString("type", "All");
+            if (!requestedType.equalsIgnoreCase("All")) {
+                query.append(" AND LOWER(").append(typeCol).append(") = ?");
+                params.add(requestedType.toLowerCase());
+            }
         }
 
         // 2. SEARCH LOGIC
@@ -125,7 +128,8 @@ public class AppFilterHandler implements HttpHandler {
         // 3. RADIUS CONSTRAINT
         if (nearbySearch) {
             query.append(" AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) <= ?");
-            params.add(uLat); params.add(uLng); params.add(uLat); params.add(radius);
+            params.add(uLat); params.add(uLng); params.add(uLat);
+            params.add(radius);
         }
 
         // 4. RATING & PRICE
