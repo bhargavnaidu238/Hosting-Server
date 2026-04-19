@@ -21,7 +21,12 @@ public class AppFilterHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // Support both GET (standard for search) and POST (for legacy support)
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
         if ("GET".equalsIgnoreCase(exchange.getRequestMethod()) || "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
             handleFilterRequest(exchange);
         } else {
@@ -34,23 +39,19 @@ public class AppFilterHandler implements HttpHandler {
             JSONObject filters = new JSONObject();
             String sortBy = "none";
 
-            // CASE 1: Handle GET Query Parameters
             if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                 String query = exchange.getRequestURI().getQuery();
                 filters = parseQueryString(query);
                 sortBy = filters.optString("sortBy", "none");
-            } 
-            // CASE 2: Handle POST JSON Body
-            else {
+            } else {
                 try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), "utf-8"))) {
                     StringBuilder body = new StringBuilder();
                     String line;
                     while ((line = br.readLine()) != null) body.append(line);
-                    
                     if (body.length() > 0) {
                         JSONObject requestJson = new JSONObject(body.toString());
                         filters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
-                        sortBy = requestJson.optString("sortBy", filters.optString("sortBy", "none"));
+                        sortBy = requestJson.optString("sortBy", "none");
                     }
                 }
             }
@@ -60,23 +61,21 @@ public class AppFilterHandler implements HttpHandler {
 
         } catch (Exception e) {
             e.printStackTrace();
-            sendResponse(exchange, "Internal Server Error: " + e.getMessage(), 500);
+            sendResponse(exchange, "Internal Server Error", 500);
         }
     }
 
     private JSONArray fetchDataWithFilters(JSONObject filters, String sortBy) throws SQLException {
         JSONArray combined = new JSONArray();
-        
-        // Use "query" or "search" or "searchQuery" to be flexible with frontend names
         String search = filters.optString("query", filters.optString("search", filters.optString("searchQuery", "")));
         filters.put("searchQuery", search);
 
-        // Fetch from Hotels table
-        combined.putAll(getFilteredData("hotels_info", "Hotel_Name", "Hotel_Type", "Room_Price", filters, sortBy));
+        // Fetch Hotels
+        combined.putAll(getFilteredData("hotels_info", "hotel_name", "hotel_type", "room_price", filters, sortBy));
         
-        // Only fetch PGs if no specific Hotel Type is requested, or if Type is 'PG'
-        String requestedType = filters.optString("type", "All");
-        if (requestedType.equalsIgnoreCase("All") || requestedType.contains("PG")) {
+        // Fetch PGs if applicable
+        String type = filters.optString("type", "All");
+        if (type.equalsIgnoreCase("All") || type.toLowerCase().contains("pg")) {
             combined.putAll(getFilteredData("paying_guest_info", "pg_name", "pg_type", "room_price", filters, sortBy));
         }
 
@@ -86,64 +85,71 @@ public class AppFilterHandler implements HttpHandler {
     private JSONArray getFilteredData(String table, String nameCol, String typeCol, String priceCol, JSONObject filters, String sortBy) throws SQLException {
         JSONArray array = new JSONArray();
         List<Object> params = new ArrayList<>();
-        StringBuilder query = new StringBuilder("SELECT * FROM " + table + " WHERE status='Active'");
+        
+        // NEW: Location Parameters
+        double uLat = filters.optDouble("lat", 0);
+        double uLng = filters.optDouble("lng", 0);
+        double radius = filters.optDouble("radius", 0); // 20km from frontend
+        boolean nearbySearch = (uLat != 0 && uLng != 0 && radius > 0);
 
-        // 1. TYPE FILTER
-        String type = filters.optString("type", "All");
-        if (!type.equalsIgnoreCase("All")) {
-            query.append(" AND (LOWER(").append(typeCol).append(") = ?)");
-            params.add(type.toLowerCase());
+        StringBuilder query = new StringBuilder("SELECT *");
+        
+        // Haversine formula calculation for PostgreSQL
+        if (nearbySearch) {
+            query.append(", (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) AS distance");
+        }
+        
+        query.append(" FROM ").append(table).append(" WHERE status='Active'");
+
+        if (nearbySearch) {
+            params.add(uLat);
+            params.add(uLng);
+            params.add(uLat);
         }
 
-        // 2. SEARCH LOGIC
+        // 1. SEARCH LOGIC
         String search = filters.optString("searchQuery", "").trim();
         if (!search.isEmpty()) {
             query.append(" AND (LOWER(").append(nameCol).append(") LIKE ? OR LOWER(city) LIKE ? OR LOWER(address) LIKE ?)");
             String pattern = "%" + search.toLowerCase() + "%";
-            params.add(pattern);
-            params.add(pattern);
-            params.add(pattern);
+            params.add(pattern); params.add(pattern); params.add(pattern);
         }
 
-        // 3. CITY FILTER (Explicit)
-        String city = filters.optString("city", "").trim();
-        if (!city.isEmpty()) {
-            query.append(" AND LOWER(city) = ?");
-            params.add(city.toLowerCase());
+        // 2. RADIUS CONSTRAINT (20km)
+        if (nearbySearch) {
+            query.append(" AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) <= ?");
+            params.add(uLat);
+            params.add(uLng);
+            params.add(uLat);
+            params.add(radius);
         }
 
-        // 4. RATING FILTER
+        // 3. RATING & PRICE
         double rating = filters.optDouble("rating", 0);
-        if (rating > 0) {
-            query.append(" AND rating >= ?");
-            params.add(rating);
-        }
+        if (rating > 0) { query.append(" AND avg_rating >= ?"); params.add(rating); }
 
-        // 5. PRICE FILTER
-        double minPrice = filters.optDouble("minPrice", 0);
         double maxPrice = filters.optDouble("maxPrice", 0);
         if (maxPrice > 0) {
-            // Logic to parse the first price in a comma-separated list
-            query.append(" AND CAST(SUBSTRING_INDEX(").append(priceCol).append(", ',', 1) AS DECIMAL) BETWEEN ? AND ?");
-            params.add(minPrice);
-            params.add(maxPrice);
+            double minPrice = filters.optDouble("minPrice", 0);
+            query.append(" AND CAST(split_part(").append(priceCol).append(", ',', 1) AS DECIMAL) BETWEEN ? AND ?");
+            params.add(minPrice); params.add(maxPrice);
         }
 
-        // 6. SORTING
-        if (sortBy != null && !sortBy.equals("none")) {
+        // 4. SORTING
+        if (nearbySearch && sortBy.equals("none")) {
+            query.append(" ORDER BY distance ASC");
+        } else if (!sortBy.equals("none")) {
             switch (sortBy) {
-                case "price_lowest": query.append(" ORDER BY CAST(SUBSTRING_INDEX(").append(priceCol).append(", ',', 1) AS DECIMAL) ASC"); break;
-                case "price_highest": query.append(" ORDER BY CAST(SUBSTRING_INDEX(").append(priceCol).append(", ',', 1) AS DECIMAL) DESC"); break;
-                case "top_rated": query.append(" ORDER BY rating DESC"); break;
+                case "price_lowest": query.append(" ORDER BY CAST(split_part(").append(priceCol).append(", ',', 1) AS DECIMAL) ASC"); break;
+                case "price_highest": query.append(" ORDER BY CAST(split_part(").append(priceCol).append(", ',', 1) AS DECIMAL) DESC"); break;
+                case "top_rated": query.append(" ORDER BY avg_rating DESC"); break;
             }
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(query.toString())) {
 
-            for (int i = 0; i < params.size(); i++) {
-                stmt.setObject(i + 1, params.get(i));
-            }
+            for (int i = 0; i < params.size(); i++) stmt.setObject(i + 1, params.get(i));
 
             ResultSet rs = stmt.executeQuery();
             ResultSetMetaData meta = rs.getMetaData();
@@ -152,8 +158,7 @@ public class AppFilterHandler implements HttpHandler {
                 JSONObject obj = new JSONObject();
                 for (int i = 1; i <= meta.getColumnCount(); i++) {
                     String col = meta.getColumnLabel(i);
-                    Object val = rs.getObject(i);
-                    obj.put(col, val == null ? JSONObject.NULL : val);
+                    obj.put(col, rs.getObject(i) == null ? JSONObject.NULL : rs.getObject(i));
                 }
                 array.put(obj);
             }
@@ -167,24 +172,20 @@ public class AppFilterHandler implements HttpHandler {
         try {
             for (String pair : query.split("&")) {
                 String[] kv = pair.split("=");
-                if (kv.length > 1) {
-                    json.put(kv[0], URLDecoder.decode(kv[1], "UTF-8"));
-                }
+                if (kv.length > 1) json.put(kv[0], URLDecoder.decode(kv[1], "UTF-8"));
             }
-        } catch (Exception e) { e.printStackTrace(); }
+        } catch (Exception e) {}
         return json;
     }
 
     private void sendJsonResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "application/json");
-        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         byte[] bytes = response.getBytes("UTF-8");
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
     }
 
     private void sendResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
-        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         byte[] bytes = response.getBytes("UTF-8");
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }

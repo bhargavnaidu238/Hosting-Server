@@ -55,12 +55,40 @@ public class HotelsHandler implements HttpHandler {
                 String hotelId = params.get("hotel_id");
                 String cityFilter = params.get("city");
                 String searchFilter = params.get("search");
+                
+                // Location parameters for proximity sorting
+                double userLat = 0.0;
+                double userLng = 0.0;
+                boolean hasLocation = false;
+                
+                try {
+                    if (params.containsKey("lat") && params.containsKey("lng")) {
+                        userLat = Double.parseDouble(params.get("lat"));
+                        userLng = Double.parseDouble(params.get("lng"));
+                        hasLocation = true;
+                    }
+                } catch (Exception e) {
+                    hasLocation = false;
+                }
 
                 List<Map<String, Object>> hotels = new ArrayList<>();
 
                 // Build SQL Query Dynamically
-                StringBuilder sql = new StringBuilder("SELECT * FROM hotels_info WHERE status = 'Active'");
+                StringBuilder sql = new StringBuilder("SELECT *");
+                
+                // Add distance calculation if location is provided
+                if (hasLocation) {
+                    sql.append(", (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) AS distance");
+                }
+                
+                sql.append(" FROM hotels_info WHERE status = 'Active'");
+                
                 List<Object> sqlParams = new ArrayList<>();
+                if (hasLocation) {
+                    sqlParams.add(userLat);
+                    sqlParams.add(userLng);
+                    sqlParams.add(userLat);
+                }
 
                 if (typeFilter != null && !typeFilter.trim().isEmpty() && !typeFilter.equalsIgnoreCase("All")) {
                     sql.append(" AND hotel_type = ?");
@@ -84,6 +112,11 @@ public class HotelsHandler implements HttpHandler {
                     sqlParams.add(pattern);
                 }
 
+                // If we have location, sort by distance nearest first
+                if (hasLocation) {
+                    sql.append(" ORDER BY distance ASC");
+                }
+
                 try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
                      PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
 
@@ -100,21 +133,20 @@ public class HotelsHandler implements HttpHandler {
                         for (int i = 1; i <= cols; i++) {
                             String key = meta.getColumnLabel(i);
                             Object val = rs.getObject(i);
-                            String valueStr = (val == null) ? "" : val.toString();
-
+                            
                             // Standardization for Flutter Frontend Keys
                             if (key.equalsIgnoreCase("hotel_name")) {
-                                row.put("Hotel_Name", valueStr);
+                                row.put("Hotel_Name", val);
                             } else if (key.equalsIgnoreCase("room_price")) {
-                                row.put("Room_Price", valueStr);
+                                row.put("Room_Price", val);
                             } else if (key.equalsIgnoreCase("hotel_images")) {
-                                row.put("Hotel_Images", buildImageCsv(valueStr));
-                            } else if (key.equalsIgnoreCase("rating") || key.equalsIgnoreCase("avg_rating")) {
-                                row.put("Rating", valueStr);
+                                row.put("Hotel_Images", buildImageCsv(val != null ? val.toString() : ""));
+                            } else if (key.equalsIgnoreCase("avg_rating") || key.equalsIgnoreCase("rating")) {
+                                row.put("Rating", val);
                             } else if (key.equalsIgnoreCase("total_reviews")) {
-                                row.put("total_reviews", valueStr);
+                                row.put("total_reviews", val);
                             } else {
-                                row.put(key, valueStr);
+                                row.put(key, val);
                             }
                         }
                         hotels.add(row);
@@ -141,7 +173,6 @@ public class HotelsHandler implements HttpHandler {
             if (t.toLowerCase().startsWith("http")) {
                 fixedUrls.add(t);
             } else {
-                // Using standard Android Emulator local IP
                 fixedUrls.add("http://10.0.2.2:8080/hotel_images/" + t);
             }
         }
@@ -205,8 +236,13 @@ public class HotelsHandler implements HttpHandler {
             sb.append("{");
             int j = 0;
             for (Map.Entry<String, Object> e : m.entrySet()) {
-                sb.append("\"").append(escape(e.getKey())).append("\":\"");
-                sb.append(escape(String.valueOf(e.getValue()))).append("\"");
+                sb.append("\"").append(escape(e.getKey())).append("\":");
+                Object value = e.getValue();
+                if (value instanceof Number) {
+                    sb.append(value);
+                } else {
+                    sb.append("\"").append(escape(String.valueOf(value))).append("\"");
+                }
                 if (j++ < m.size() - 1) sb.append(",");
             }
             sb.append("}");
