@@ -70,13 +70,17 @@ public class AppFilterHandler implements HttpHandler {
         String search = filters.optString("query", filters.optString("search", filters.optString("searchQuery", "")));
         filters.put("searchQuery", search);
 
-        // Fetch Hotels
-        combined.putAll(getFilteredData("hotels_info", "hotel_name", "hotel_type", "room_price", filters, sortBy));
-        
-        // Fetch PGs if applicable
-        String type = filters.optString("type", "All");
-        if (type.equalsIgnoreCase("All") || type.toLowerCase().contains("pg")) {
+        String requestedType = filters.optString("type", "All");
+
+        // Logic Fix: Only query the relevant table based on the requested category
+        boolean isPgRequest = requestedType.toLowerCase().contains("pg") || requestedType.equalsIgnoreCase("Paying Guest");
+
+        if (isPgRequest) {
+            // Fetch strictly from PG table
             combined.putAll(getFilteredData("paying_guest_info", "pg_name", "pg_type", "room_price", filters, sortBy));
+        } else {
+            // Fetch strictly from Hotels table
+            combined.putAll(getFilteredData("hotels_info", "hotel_name", "hotel_type", "room_price", filters, sortBy));
         }
 
         return combined;
@@ -86,15 +90,13 @@ public class AppFilterHandler implements HttpHandler {
         JSONArray array = new JSONArray();
         List<Object> params = new ArrayList<>();
         
-        // NEW: Location Parameters
         double uLat = filters.optDouble("lat", 0);
         double uLng = filters.optDouble("lng", 0);
-        double radius = filters.optDouble("radius", 0); // 20km from frontend
+        double radius = filters.optDouble("radius", 0); 
         boolean nearbySearch = (uLat != 0 && uLng != 0 && radius > 0);
 
         StringBuilder query = new StringBuilder("SELECT *");
         
-        // Haversine formula calculation for PostgreSQL
         if (nearbySearch) {
             query.append(", (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) AS distance");
         }
@@ -102,12 +104,17 @@ public class AppFilterHandler implements HttpHandler {
         query.append(" FROM ").append(table).append(" WHERE status='Active'");
 
         if (nearbySearch) {
-            params.add(uLat);
-            params.add(uLng);
-            params.add(uLat);
+            params.add(uLat); params.add(uLng); params.add(uLat);
         }
 
-        // 1. SEARCH LOGIC
+        // 1. STRICT CATEGORY FILTERING logic
+        String requestedType = filters.optString("type", "All");
+        if (!requestedType.equalsIgnoreCase("All")) {
+            query.append(" AND LOWER(").append(typeCol).append(") = ?");
+            params.add(requestedType.toLowerCase());
+        }
+
+        // 2. SEARCH LOGIC
         String search = filters.optString("searchQuery", "").trim();
         if (!search.isEmpty()) {
             query.append(" AND (LOWER(").append(nameCol).append(") LIKE ? OR LOWER(city) LIKE ? OR LOWER(address) LIKE ?)");
@@ -115,16 +122,13 @@ public class AppFilterHandler implements HttpHandler {
             params.add(pattern); params.add(pattern); params.add(pattern);
         }
 
-        // 2. RADIUS CONSTRAINT (20km)
+        // 3. RADIUS CONSTRAINT
         if (nearbySearch) {
             query.append(" AND (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) <= ?");
-            params.add(uLat);
-            params.add(uLng);
-            params.add(uLat);
-            params.add(radius);
+            params.add(uLat); params.add(uLng); params.add(uLat); params.add(radius);
         }
 
-        // 3. RATING & PRICE
+        // 4. RATING & PRICE
         double rating = filters.optDouble("rating", 0);
         if (rating > 0) { query.append(" AND avg_rating >= ?"); params.add(rating); }
 
@@ -135,7 +139,7 @@ public class AppFilterHandler implements HttpHandler {
             params.add(minPrice); params.add(maxPrice);
         }
 
-        // 4. SORTING
+        // 5. SORTING
         if (nearbySearch && sortBy.equals("none")) {
             query.append(" ORDER BY distance ASC");
         } else if (!sortBy.equals("none")) {
