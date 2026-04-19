@@ -20,7 +20,6 @@ public class PgsHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        // Add CORS headers
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, OPTIONS");
         exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
@@ -34,14 +33,12 @@ public class PgsHandler implements HttpHandler {
         String path = uri.getPath();
 
         try {
-            // Serve images
             if (path.startsWith("/hotel_images/")) {
                 String fileName = path.substring("/hotel_images/".length());
                 serveImage(exchange, fileName);
                 return;
             }
 
-            // GET paying_guest
             if (path.startsWith("/paying_guest")) {
                 if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
                     sendError(exchange, 405, "Method Not Allowed");
@@ -55,7 +52,6 @@ public class PgsHandler implements HttpHandler {
                 String cityFilter = params.get("city");
                 String searchFilter = params.get("search");
 
-                // Location parameters for proximity logic
                 double userLat = 0.0;
                 double userLng = 0.0;
                 boolean hasLocation = false;
@@ -71,10 +67,8 @@ public class PgsHandler implements HttpHandler {
 
                 List<Map<String, Object>> pgsList = new ArrayList<>();
                 
-                // Build SQL with distance calculation
                 StringBuilder sql = new StringBuilder("SELECT *");
                 if (hasLocation) {
-                    // Haversine formula to calculate distance in KM
                     sql.append(", (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) AS distance");
                 }
                 
@@ -87,19 +81,16 @@ public class PgsHandler implements HttpHandler {
                     sqlParams.add(userLat);
                 }
 
-                // 1. Strict Category Type Filter
                 if (typeFilter != null && !typeFilter.trim().isEmpty() && !typeFilter.equalsIgnoreCase("All")) {
                     sql.append(" AND LOWER(pg_type) = ?");
                     sqlParams.add(typeFilter.toLowerCase().trim());
                 }
 
-                // 2. City Filter
                 if (cityFilter != null && !cityFilter.trim().isEmpty()) {
                     sql.append(" AND LOWER(city) = ?");
                     sqlParams.add(cityFilter.toLowerCase().trim());
                 }
 
-                // 3. Search Keyword Filter
                 if (searchFilter != null && !searchFilter.trim().isEmpty()) {
                     sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(city) LIKE ? OR LOWER(address) LIKE ?)");
                     String pattern = "%" + searchFilter.toLowerCase().trim() + "%";
@@ -108,7 +99,6 @@ public class PgsHandler implements HttpHandler {
                     sqlParams.add(pattern);
                 }
 
-                // 4. Proximity Logic: Only show within 20km if searching "nearby"
                 if (hasLocation) {
                     sql.append(" HAVING distance <= 20 ORDER BY distance ASC");
                 }
@@ -130,14 +120,22 @@ public class PgsHandler implements HttpHandler {
                             String key = meta.getColumnLabel(i).toLowerCase();
                             Object val = rs.getObject(i);
                             
-                            if ("pg_images".equals(key)) {
+                            // EXPLICIT COORDINATE MAPPING
+                            // We ensure 'latitude' and 'longitude' are always present for Flutter
+                            if ("latitude".equals(key)) {
+                                row.put("latitude", val);
+                                row.put("Latitude", val); // Compatibility for different Flutter versions
+                            } else if ("longitude".equals(key)) {
+                                row.put("longitude", val);
+                                row.put("Longitude", val); // Compatibility for different Flutter versions
+                            } else if ("pg_images".equals(key)) {
                                 row.put("pg_images", buildImageCsv(val != null ? val.toString() : ""));
                             } else if ("pg_id".equals(key)) {
                                 row.put("pg_id", val);
-                                row.put("Hotel_ID", val); // Compatibility mapping
+                                row.put("Hotel_ID", val); 
                             } else if ("pg_name".equals(key)) {
                                 row.put("pg_name", val);
-                                row.put("Hotel_Name", val); // Compatibility mapping
+                                row.put("Hotel_Name", val);
                             } else {
                                 row.put(key, val);
                             }
