@@ -7,6 +7,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.*;
+import java.net.URLDecoder;
 import java.sql.*;
 import java.util.*;
 
@@ -20,30 +21,39 @@ public class AppFilterHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+        // Support both GET (standard for search) and POST (for legacy support)
+        if ("GET".equalsIgnoreCase(exchange.getRequestMethod()) || "POST".equalsIgnoreCase(exchange.getRequestMethod())) {
             handleFilterRequest(exchange);
         } else {
-            sendResponse(exchange, "Only POST method supported", 405);
+            sendResponse(exchange, "Method not supported", 405);
         }
     }
 
     private void handleFilterRequest(HttpExchange exchange) throws IOException {
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), "utf-8"))) {
-            StringBuilder body = new StringBuilder();
-            String line;
-            while ((line = br.readLine()) != null) {
-                body.append(line);
-            }
+        try {
+            JSONObject filters = new JSONObject();
+            String sortBy = "none";
 
-            if (body.toString().trim().isEmpty()) {
-                sendJsonResponse(exchange, new JSONArray().toString(), 200);
-                return;
+            // CASE 1: Handle GET Query Parameters
+            if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String query = exchange.getRequestURI().getQuery();
+                filters = parseQueryString(query);
+                sortBy = filters.optString("sortBy", "none");
+            } 
+            // CASE 2: Handle POST JSON Body
+            else {
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), "utf-8"))) {
+                    StringBuilder body = new StringBuilder();
+                    String line;
+                    while ((line = br.readLine()) != null) body.append(line);
+                    
+                    if (body.length() > 0) {
+                        JSONObject requestJson = new JSONObject(body.toString());
+                        filters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
+                        sortBy = requestJson.optString("sortBy", filters.optString("sortBy", "none"));
+                    }
+                }
             }
-
-            JSONObject requestJson = new JSONObject(body.toString());
-            // Support both direct filters or nested filters object
-            JSONObject filters = requestJson.has("filters") ? requestJson.getJSONObject("filters") : requestJson;
-            String sortBy = requestJson.optString("sortBy", filters.optString("sortBy", "none"));
 
             JSONArray result = fetchDataWithFilters(filters, sortBy);
             sendJsonResponse(exchange, result.toString(), 200);
@@ -57,11 +67,18 @@ public class AppFilterHandler implements HttpHandler {
     private JSONArray fetchDataWithFilters(JSONObject filters, String sortBy) throws SQLException {
         JSONArray combined = new JSONArray();
         
-        // Fetch from Hotels
+        // Use "query" or "search" or "searchQuery" to be flexible with frontend names
+        String search = filters.optString("query", filters.optString("search", filters.optString("searchQuery", "")));
+        filters.put("searchQuery", search);
+
+        // Fetch from Hotels table
         combined.putAll(getFilteredData("hotels_info", "Hotel_Name", "Hotel_Type", "Room_Price", filters, sortBy));
         
-        // Fetch from PGs
-        combined.putAll(getFilteredData("paying_guest_info", "pg_name", "pg_type", "room_price", filters, sortBy));
+        // Only fetch PGs if no specific Hotel Type is requested, or if Type is 'PG'
+        String requestedType = filters.optString("type", "All");
+        if (requestedType.equalsIgnoreCase("All") || requestedType.contains("PG")) {
+            combined.putAll(getFilteredData("paying_guest_info", "pg_name", "pg_type", "room_price", filters, sortBy));
+        }
 
         return combined;
     }
@@ -71,53 +88,52 @@ public class AppFilterHandler implements HttpHandler {
         List<Object> params = new ArrayList<>();
         StringBuilder query = new StringBuilder("SELECT * FROM " + table + " WHERE status='Active'");
 
-        // 1. IMPROVED SEARCH LOGIC (Fixes the "Vivanta" issue)
-        String searchQuery = filters.optString("searchQuery", "").trim();
-        if (!searchQuery.isEmpty()) {
-            // Priority: Name match or location match
-            query.append(" AND (LOWER(").append(nameCol).append(") LIKE ? OR LOWER(city) LIKE ?)");
-            params.add("%" + searchQuery.toLowerCase() + "%");
-            params.add("%" + searchQuery.toLowerCase() + "%");
+        // 1. TYPE FILTER
+        String type = filters.optString("type", "All");
+        if (!type.equalsIgnoreCase("All")) {
+            query.append(" AND (LOWER(").append(typeCol).append(") = ?)");
+            params.add(type.toLowerCase());
         }
 
-        // 2. CITY FILTER
+        // 2. SEARCH LOGIC
+        String search = filters.optString("searchQuery", "").trim();
+        if (!search.isEmpty()) {
+            query.append(" AND (LOWER(").append(nameCol).append(") LIKE ? OR LOWER(city) LIKE ? OR LOWER(address) LIKE ?)");
+            String pattern = "%" + search.toLowerCase() + "%";
+            params.add(pattern);
+            params.add(pattern);
+            params.add(pattern);
+        }
+
+        // 3. CITY FILTER (Explicit)
         String city = filters.optString("city", "").trim();
         if (!city.isEmpty()) {
-            query.append(" AND (LOWER(city) = ?)");
+            query.append(" AND LOWER(city) = ?");
             params.add(city.toLowerCase());
         }
 
-        // 3. RATING FILTER
+        // 4. RATING FILTER
         double rating = filters.optDouble("rating", 0);
         if (rating > 0) {
             query.append(" AND rating >= ?");
             params.add(rating);
         }
 
-        // 4. PRICE FILTER (Handling comma-separated strings)
+        // 5. PRICE FILTER
         double minPrice = filters.optDouble("minPrice", 0);
         double maxPrice = filters.optDouble("maxPrice", 0);
         if (maxPrice > 0) {
-            query.append(" AND (");
-            // This checks the 1st, 2nd, and 3rd price in your comma list
-            query.append("CAST(SUBSTRING_INDEX(").append(priceCol).append(", ',', 1) AS DECIMAL) BETWEEN ? AND ? ");
-            query.append("OR CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(").append(priceCol).append(", ',', 2), ',', -1) AS DECIMAL) BETWEEN ? AND ? ");
-            query.append("OR CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(").append(priceCol).append(", ',', 3), ',', -1) AS DECIMAL) BETWEEN ? AND ?");
-            query.append(")");
-
-            // Add 6 params (min, max, min, max, min, max)
-            for(int i=0; i<3; i++) {
-                params.add(minPrice);
-                params.add(maxPrice);
-            }
+            // Logic to parse the first price in a comma-separated list
+            query.append(" AND CAST(SUBSTRING_INDEX(").append(priceCol).append(", ',', 1) AS DECIMAL) BETWEEN ? AND ?");
+            params.add(minPrice);
+            params.add(maxPrice);
         }
 
-        // 5. SORTING LOGIC
+        // 6. SORTING
         if (sortBy != null && !sortBy.equals("none")) {
-            String firstPriceExpr = "CAST(SUBSTRING_INDEX(" + priceCol + ", ',', 1) AS DECIMAL)";
             switch (sortBy) {
-                case "price_lowest": query.append(" ORDER BY ").append(firstPriceExpr).append(" ASC"); break;
-                case "price_highest": query.append(" ORDER BY ").append(firstPriceExpr).append(" DESC"); break;
+                case "price_lowest": query.append(" ORDER BY CAST(SUBSTRING_INDEX(").append(priceCol).append(", ',', 1) AS DECIMAL) ASC"); break;
+                case "price_highest": query.append(" ORDER BY CAST(SUBSTRING_INDEX(").append(priceCol).append(", ',', 1) AS DECIMAL) DESC"); break;
                 case "top_rated": query.append(" ORDER BY rating DESC"); break;
             }
         }
@@ -137,29 +153,38 @@ public class AppFilterHandler implements HttpHandler {
                 for (int i = 1; i <= meta.getColumnCount(); i++) {
                     String col = meta.getColumnLabel(i);
                     Object val = rs.getObject(i);
-                    obj.put(col.toLowerCase(), val == null ? JSONObject.NULL : val);
+                    obj.put(col, val == null ? JSONObject.NULL : val);
                 }
-                
-                // Unified Display Fields
-                boolean isPg = table.equalsIgnoreCase("paying_guest_info");
-                obj.put("display_name", rs.getString(isPg ? "pg_name" : "Hotel_Name"));
-                obj.put("display_type", rs.getString(isPg ? "pg_type" : "Hotel_Type"));
-                obj.put("category_tag", isPg ? "PG" : "Hotel");
-                
                 array.put(obj);
             }
         }
         return array;
     }
 
+    private JSONObject parseQueryString(String query) {
+        JSONObject json = new JSONObject();
+        if (query == null || query.isEmpty()) return json;
+        try {
+            for (String pair : query.split("&")) {
+                String[] kv = pair.split("=");
+                if (kv.length > 1) {
+                    json.put(kv[0], URLDecoder.decode(kv[1], "UTF-8"));
+                }
+            }
+        } catch (Exception e) { e.printStackTrace(); }
+        return json;
+    }
+
     private void sendJsonResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
         exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         byte[] bytes = response.getBytes("UTF-8");
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }
     }
 
     private void sendResponse(HttpExchange exchange, String response, int statusCode) throws IOException {
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         byte[] bytes = response.getBytes("UTF-8");
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) { os.write(bytes); }

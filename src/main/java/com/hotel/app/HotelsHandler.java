@@ -49,37 +49,46 @@ public class HotelsHandler implements HttpHandler {
                 }
 
                 String query = uri.getQuery();
-                String typeFilter = null;
-                boolean detailsPage = false;
-                String hotelId = null;
-
-                if (query != null) {
-                    Map<String, String> params = parseQueryParams(query);
-                    typeFilter = params.get("type");
-                    hotelId = params.get("hotel_id");
-                    if (hotelId != null) detailsPage = true;
-                }
+                Map<String, String> params = parseQueryParams(query);
+                
+                String typeFilter = params.get("type");
+                String hotelId = params.get("hotel_id");
+                String cityFilter = params.get("city");
+                String searchFilter = params.get("search");
 
                 List<Map<String, Object>> hotels = new ArrayList<>();
 
-                // Build SQL Query
-                String sql = "SELECT * FROM hotels_info WHERE status = 'Active'";
-                if (typeFilter != null && !typeFilter.trim().isEmpty()) {
-                    sql += " AND hotel_type = ?";
+                // Build SQL Query Dynamically
+                StringBuilder sql = new StringBuilder("SELECT * FROM hotels_info WHERE status = 'Active'");
+                List<Object> sqlParams = new ArrayList<>();
+
+                if (typeFilter != null && !typeFilter.trim().isEmpty() && !typeFilter.equalsIgnoreCase("All")) {
+                    sql.append(" AND hotel_type = ?");
+                    sqlParams.add(typeFilter);
                 }
-                if (detailsPage && hotelId != null) {
-                    sql += " AND Hotel_ID = ?";
+                
+                if (hotelId != null && !hotelId.trim().isEmpty()) {
+                    sql.append(" AND Hotel_ID = ?");
+                    sqlParams.add(hotelId);
+                }
+
+                if (cityFilter != null && !cityFilter.trim().isEmpty()) {
+                    sql.append(" AND LOWER(city) = ?");
+                    sqlParams.add(cityFilter.toLowerCase().trim());
+                }
+
+                if (searchFilter != null && !searchFilter.trim().isEmpty()) {
+                    sql.append(" AND (LOWER(Hotel_Name) LIKE ? OR LOWER(city) LIKE ?)");
+                    String pattern = "%" + searchFilter.toLowerCase().trim() + "%";
+                    sqlParams.add(pattern);
+                    sqlParams.add(pattern);
                 }
 
                 try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
-                     PreparedStatement stmt = conn.prepareStatement(sql)) {
+                     PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
 
-                    int paramIndex = 1;
-                    if (typeFilter != null && !typeFilter.trim().isEmpty()) {
-                        stmt.setString(paramIndex++, typeFilter);
-                    }
-                    if (detailsPage && hotelId != null) {
-                        stmt.setString(paramIndex++, hotelId);
+                    for (int i = 0; i < sqlParams.size(); i++) {
+                        stmt.setObject(i + 1, sqlParams.get(i));
                     }
 
                     ResultSet rs = stmt.executeQuery();
@@ -93,21 +102,17 @@ public class HotelsHandler implements HttpHandler {
                             Object val = rs.getObject(i);
                             String valueStr = (val == null) ? "" : val.toString();
 
-                            // Standardization for Flutter Frontend
+                            // Standardization for Flutter Frontend Keys
                             if (key.equalsIgnoreCase("hotel_name")) {
                                 row.put("Hotel_Name", valueStr);
-                            } else if (key.equalsIgnoreCase("room_type")) {
-                                row.put("Room_Type", valueStr);
                             } else if (key.equalsIgnoreCase("room_price")) {
                                 row.put("Room_Price", valueStr);
                             } else if (key.equalsIgnoreCase("hotel_images")) {
                                 row.put("Hotel_Images", buildImageCsv(valueStr));
-                            } else if (key.equalsIgnoreCase("amenities")) {
-                                row.put("Amenities", valueStr);
-                            } else if (key.equalsIgnoreCase("avg_rating")) {
-                                row.put("avg_rating", valueStr); // Matches Flutter lowercase key
+                            } else if (key.equalsIgnoreCase("rating") || key.equalsIgnoreCase("avg_rating")) {
+                                row.put("Rating", valueStr);
                             } else if (key.equalsIgnoreCase("total_reviews")) {
-                                row.put("total_reviews", valueStr); // Matches Flutter lowercase key
+                                row.put("total_reviews", valueStr);
                             } else {
                                 row.put(key, valueStr);
                             }
@@ -136,7 +141,7 @@ public class HotelsHandler implements HttpHandler {
             if (t.toLowerCase().startsWith("http")) {
                 fixedUrls.add(t);
             } else {
-                // Adjust this IP to your local server/emulator IP
+                // Using standard Android Emulator local IP
                 fixedUrls.add("http://10.0.2.2:8080/hotel_images/" + t);
             }
         }
@@ -145,11 +150,13 @@ public class HotelsHandler implements HttpHandler {
 
     private Map<String, String> parseQueryParams(String query) {
         Map<String, String> params = new HashMap<>();
-        if (query == null) return params;
+        if (query == null || query.isEmpty()) return params;
         for (String param : query.split("&")) {
             String[] pair = param.split("=");
             if (pair.length > 1) {
                 params.put(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8));
+            } else if (pair.length == 1) {
+                params.put(pair[0], "");
             }
         }
         return params;
