@@ -10,7 +10,6 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class HomePageHandler implements HttpHandler {
 
@@ -36,125 +35,106 @@ public class HomePageHandler implements HttpHandler {
         }
 
         URI requestURI = exchange.getRequestURI();
-        String queryParams = requestURI.getQuery();
+        Map<String, String> params = parseQueryParameters(requestURI.getQuery());
 
-        String hotelType = null;
-        String searchQuery = null;
-
-        if (queryParams != null && !queryParams.isEmpty()) {
-            for (String param : queryParams.split("&")) {
-                if (param.isBlank()) continue;
-                String[] pair = param.split("=", 2);
-                String key = URLDecoder.decode(pair[0], StandardCharsets.UTF_8);
-                String value = pair.length > 1 ? URLDecoder.decode(pair[1], StandardCharsets.UTF_8) : "";
-                
-                if ("type".equalsIgnoreCase(key)) {
-                    hotelType = value.trim();
-                } else if ("query".equalsIgnoreCase(key) || "q".equalsIgnoreCase(key) || "searchQuery".equalsIgnoreCase(key)) {
-                    searchQuery = value.trim();
-                }
-            }
-        }
+        String hotelType = params.get("type");
+        String searchQuery = params.get("query");
+        
+        // Location Support for "Nearby" Home Suggestions
+        double lat = 0.0;
+        double lng = 0.0;
+        try {
+            if (params.containsKey("lat")) lat = Double.parseDouble(params.get("lat"));
+            if (params.containsKey("lng")) lng = Double.parseDouble(params.get("lng"));
+        } catch (Exception e) { /* default to 0 */ }
 
         String normalizedType = normalizeString(hotelType);
 
-        // SMART ROUTING: If searching for "pg" or "paying guest" keywords
+        // ROUTING BASED ON YOUR DART CATEGORIES
         if (normalizedType.contains("payingguest") || normalizedType.contains("pg")) {
-            handlePayingGuestRequest(exchange, searchQuery);
+            handlePayingGuestRequest(exchange, searchQuery, lat, lng);
         } else if (searchQuery != null && !searchQuery.isBlank() && normalizedType.isEmpty()) {
-            handleGlobalSearch(exchange, searchQuery);
+            handleGlobalSearch(exchange, searchQuery, lat, lng);
         } else {
-            handleHotelRequest(exchange, hotelType, searchQuery);
+            handleHotelRequest(exchange, hotelType, searchQuery, lat, lng);
         }
     }
 
-    // Helper: Normalize strings and strip trailing 's' for singular comparison
-    private String normalizeString(String input) {
-        if (input == null) return "";
-        String clean = input.replaceAll("[_\\-\\s]", "").toLowerCase();
-        if (clean.endsWith("s") && clean.length() > 3) {
-            clean = clean.substring(0, clean.length() - 1);
-        }
-        return clean;
-    }
-
-    private void handleGlobalSearch(HttpExchange exchange, String searchQuery) throws IOException {
+    private void handleGlobalSearch(HttpExchange exchange, String query, double lat, double lng) throws IOException {
         try {
             List<Map<String, Object>> results = new ArrayList<>();
-            results.addAll(getHotelsData(null, searchQuery));
-            results.addAll(getPGData(searchQuery));
+            results.addAll(getFilteredData("hotels_info", null, query, lat, lng));
+            results.addAll(getFilteredData("paying_guest_info", null, query, lat, lng));
             sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(results));
         } catch (SQLException e) {
-            e.printStackTrace();
-            sendJsonResponse(exchange, 500, "{\"error\":\"Database error\"}");
+            sendJsonResponse(exchange, 500, "{\"error\":\"Global search failed\"}");
         }
     }
 
-    private void handleHotelRequest(HttpExchange exchange, String hotelType, String searchQuery) throws IOException {
+    private void handleHotelRequest(HttpExchange exchange, String type, String query, double lat, double lng) throws IOException {
         try {
-            List<Map<String, Object>> hotels = getHotelsData(hotelType, searchQuery);
+            List<Map<String, Object>> hotels = getFilteredData("hotels_info", type, query, lat, lng);
             sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(hotels));
         } catch (SQLException e) {
-            e.printStackTrace();
-            sendJsonResponse(exchange, 500, "{\"error\":\"Database error in hotels\"}");
+            sendJsonResponse(exchange, 500, "{\"error\":\"Hotel fetch failed\"}");
         }
     }
 
-    private void handlePayingGuestRequest(HttpExchange exchange, String searchQuery) throws IOException {
+    private void handlePayingGuestRequest(HttpExchange exchange, String query, double lat, double lng) throws IOException {
         try {
-            List<Map<String, Object>> pgs = getPGData(searchQuery);
+            List<Map<String, Object>> pgs = getFilteredData("paying_guest_info", null, query, lat, lng);
             sendJsonResponse(exchange, 200, objectMapper.writeValueAsString(pgs));
         } catch (SQLException e) {
-            e.printStackTrace();
-            sendJsonResponse(exchange, 500, "{\"error\":\"Database error in PGs\"}");
+            sendJsonResponse(exchange, 500, "{\"error\":\"PG fetch failed\"}");
         }
     }
 
-    private List<Map<String, Object>> getHotelsData(String hotelType, String searchQuery) throws SQLException {
+    private List<Map<String, Object>> getFilteredData(String table, String type, String query, double uLat, double uLng) throws SQLException {
         List<Map<String, Object>> list = new ArrayList<>();
-        StringBuilder sql = new StringBuilder("SELECT * FROM hotels_info WHERE status = 'Active'");
-        List<String> params = new ArrayList<>();
+        List<Object> params = new ArrayList<>();
+        boolean isNearby = (uLat != 0 && uLng != 0);
 
-        // 1. SMART FILTER BY CATEGORY (If user clicked a category)
-        if (hotelType != null && !hotelType.isBlank()) {
-            String clean = normalizeString(hotelType);
-            sql.append(" AND (LOWER(hotel_type) LIKE ? OR LOWER(hotel_type) LIKE ?)");
-            params.add("%" + clean + "%");
-            params.add("%" + hotelType.toLowerCase() + "%");
+        StringBuilder sql = new StringBuilder("SELECT *");
+        if (isNearby) {
+            // Haversine formula for sorting by proximity
+            sql.append(", (6371 * acos(cos(radians(?)) * cos(radians(latitude)) * cos(radians(longitude) - radians(?)) + sin(radians(?)) * sin(radians(latitude)))) AS distance");
+            params.add(uLat); params.add(uLng); params.add(uLat);
+        }
+        
+        sql.append(" FROM ").append(table).append(" WHERE status = 'Active'");
+
+        // 1. CATEGORY FILTER (Strict)
+        if (type != null && !type.isBlank()) {
+            String col = table.equals("hotels_info") ? "hotel_type" : "pg_type";
+            sql.append(" AND LOWER(").append(col).append(") = ?");
+            params.add(type.toLowerCase().trim());
         }
 
-        // 2. SMART SEARCH LOGIC (Fuzzy matching on keywords)
-        if (searchQuery != null && !searchQuery.isBlank()) {
-            String[] tokens = searchQuery.toLowerCase().split("\\s+");
-            for (String token : tokens) {
-                if (token.length() < 2) continue;
-                String singular = normalizeString(token);
-                sql.append(" AND (LOWER(hotel_name) LIKE ? OR LOWER(hotel_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(address) LIKE ?)");
-                params.add("%" + singular + "%");
-                params.add("%" + singular + "%");
-                params.add("%" + singular + "%");
-                params.add("%" + singular + "%");
-            }
+        // 2. SEARCH QUERY (Fuzzy)
+        if (query != null && !query.isBlank()) {
+            String nameCol = table.equals("hotels_info") ? "hotel_name" : "pg_name";
+            sql.append(" AND (LOWER(").append(nameCol).append(") LIKE ? OR LOWER(city) LIKE ?)");
+            String pattern = "%" + query.toLowerCase() + "%";
+            params.add(pattern); params.add(pattern);
+        }
+
+        if (isNearby) {
+            sql.append(" ORDER BY distance ASC");
         }
 
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
 
-            for (int i = 0; i < params.size(); i++) {
-                stmt.setString(i + 1, params.get(i));
-            }
+            for (int i = 0; i < params.size(); i++) stmt.setObject(i + 1, params.get(i));
 
             try (ResultSet rs = stmt.executeQuery()) {
+                ResultSetMetaData meta = rs.getMetaData();
                 while (rs.next()) {
                     Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("hotel_id", rs.getString("hotel_id"));
-                    item.put("hotel_name", rs.getString("hotel_name"));
-                    item.put("hotel_type", rs.getString("hotel_type"));
-                    item.put("city", rs.getString("city"));
-                    item.put("state", rs.getString("state"));
-                    item.put("room_price", rs.getObject("room_price"));
-                    item.put("hotel_images", buildImageString(rs.getString("hotel_images")));
-                    item.put("category", "hotel");
+                    for (int i = 1; i <= meta.getColumnCount(); i++) {
+                        String colLabel = meta.getColumnLabel(i).toLowerCase();
+                        item.put(colLabel, rs.getObject(i));
+                    }
                     list.add(item);
                 }
             }
@@ -162,65 +142,23 @@ public class HomePageHandler implements HttpHandler {
         return list;
     }
 
-    private List<Map<String, Object>> getPGData(String searchQuery) throws SQLException {
-        List<Map<String, Object>> list = new ArrayList<>();
-        StringBuilder sql = new StringBuilder("SELECT * FROM paying_guest_info WHERE status = 'Active'");
-        List<String> params = new ArrayList<>();
-
-        if (searchQuery != null && !searchQuery.isBlank()) {
-            String[] tokens = searchQuery.toLowerCase().split("\\s+");
-            for (String token : tokens) {
-                if (token.length() < 2) continue;
-                String singular = normalizeString(token);
-                sql.append(" AND (LOWER(pg_name) LIKE ? OR LOWER(pg_type) LIKE ? OR LOWER(city) LIKE ? OR LOWER(address) LIKE ?)");
-                params.add("%" + singular + "%");
-                params.add("%" + singular + "%");
-                params.add("%" + singular + "%");
-                params.add("%" + singular + "%");
+    private Map<String, String> parseQueryParameters(String query) {
+        Map<String, String> params = new HashMap<>();
+        if (query == null) return params;
+        for (String param : query.split("&")) {
+            String[] pair = param.split("=", 2);
+            if (pair.length > 0) {
+                String key = URLDecoder.decode(pair[0], StandardCharsets.UTF_8);
+                String value = pair.length > 1 ? URLDecoder.decode(pair[1], StandardCharsets.UTF_8) : "";
+                params.put(key, value);
             }
         }
-
-        try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
-            
-            for (int i = 0; i < params.size(); i++) {
-                stmt.setString(i + 1, params.get(i));
-            }
-
-            try (ResultSet rs = stmt.executeQuery()) {
-                while (rs.next()) {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("id", rs.getString("pg_id")); // Matched with CREATE TABLE schema
-                    item.put("pg_name", rs.getString("pg_name"));
-                    item.put("pg_type", rs.getString("pg_type"));
-                    item.put("city", rs.getString("city"));
-                    item.put("state", rs.getString("state"));
-                    item.put("room_price", rs.getObject("room_price"));
-                    item.put("pg_images", buildImageString(rs.getString("pg_images")));
-                    item.put("category", "pg");
-                    list.add(item);
-                }
-            }
-        }
-        return list;
+        return params;
     }
 
-    private String buildImageString(String raw) {
-        if (raw == null || raw.isBlank()) return "";
-        List<String> processedList = new ArrayList<>();
-        String[] parts = raw.split(",");
-        for (String p : parts) {
-            String t = p.trim();
-            if (t.isEmpty()) continue;
-            if (t.toLowerCase().startsWith("http")) {
-                processedList.add(t);
-            } else {
-                String baseUrl = dbConfig.getImageBaseUrl();
-                if (!baseUrl.endsWith("/")) baseUrl += "/";
-                processedList.add(baseUrl + t.replaceAll("^/+", ""));
-            }
-        }
-        return String.join(",", processedList);
+    private String normalizeString(String input) {
+        if (input == null) return "";
+        return input.replaceAll("[_\\-\\s]", "").toLowerCase().replace("s", "");
     }
 
     private void addCorsHeaders(HttpExchange exchange) {
