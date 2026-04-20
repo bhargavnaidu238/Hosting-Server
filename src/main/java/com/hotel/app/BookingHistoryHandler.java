@@ -25,6 +25,16 @@ public class BookingHistoryHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        // Add CORS headers for all requests
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, PUT, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+
+        if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
         switch (exchange.getRequestMethod().toUpperCase()) {
             case "GET" -> handleBookingHistory(exchange);
             case "PUT" -> handlePutRequests(exchange);
@@ -44,25 +54,24 @@ public class BookingHistoryHandler implements HttpHandler {
         }
     }
 
-    // -------------------- GET HISTORY (FIXED LOGIC) --------------------
+    // -------------------- GET HISTORY (FIXED FOR PG VISIBILITY) --------------------
     private void handleBookingHistory(HttpExchange exchange) throws IOException {
         Map<String, String> params = decodeParams(exchange.getRequestURI().getQuery());
 
         String email = params.getOrDefault("email", "").trim();
         String userId = params.getOrDefault("userId", "").trim();
 
-        boolean showUpcoming = params.getOrDefault("includeUpcoming", "false")
-                .trim().equalsIgnoreCase("true");
-
         if (email.isEmpty() && userId.isEmpty()) {
             sendResponse(exchange, 400, json("error", "Missing email or userId"));
             return;
         }
 
+        // Logic Fix: Removed manual conditional filtering. Fetching all records 
+        // linked to the user ensures PG records are not excluded by status/date logic.
         String sql = """
                 SELECT * FROM bookings_info
                 WHERE (email=? OR user_id=?)
-                ORDER BY check_in_date DESC
+                ORDER BY payment_confirmed_at DESC, check_in_date DESC
                 """;
 
         List<Map<String, Object>> results = new ArrayList<>();
@@ -74,44 +83,10 @@ public class BookingHistoryHandler implements HttpHandler {
             stmt.setString(2, userId);
 
             ResultSet rs = stmt.executeQuery();
-            LocalDate today = LocalDate.now();
 
             while (rs.next()) {
-                LocalDate checkIn = rs.getDate("check_in_date") != null
-                        ? rs.getDate("check_in_date").toLocalDate() : null;
-
-                LocalDate checkOut = rs.getDate("check_out_date") != null
-                        ? rs.getDate("check_out_date").toLocalDate() : null;
-
-                String status = Optional.ofNullable(rs.getString("booking_status"))
-                        .orElse("").trim().toUpperCase();
-
-                boolean include = false;
-
-                if (showUpcoming) {
-                    /* UPCOMING / ONGOING: 
-                       Include if checkout is today or later AND status is not Cancelled.
-                       This ensures Checked-in and even today's Completed bookings stay visible.
-                    */
-                    if (checkOut != null && !status.equals("CANCELLED") &&
-                       (checkOut.isEqual(today) || checkOut.isAfter(today))) {
-                        include = true;
-                    }
-                } else {
-                    /* PAST: 
-                       Include if checkout date is strictly in the past
-                       OR the booking is explicitly Cancelled.
-                    */
-                    if (checkOut != null && checkOut.isBefore(today)) {
-                        include = true;
-                    } else if (status.equals("CANCELLED")) {
-                        include = true;
-                    }
-                }
-
-                if (include) {
-                    results.add(mapRow(rs));
-                }
+                // Map the row and include all PG specific columns (months, room_price_per_month)
+                results.add(mapRow(rs));
             }
 
             sendResponse(exchange, 200, objectMapper.writeValueAsString(results));
@@ -134,8 +109,7 @@ public class BookingHistoryHandler implements HttpHandler {
             return;
         }
 
-        String fetchSql = "SELECT room_price_per_day, gst FROM bookings_info WHERE booking_id=?";
-        // Explicit cast added for booking_status_enum
+        String fetchSql = "SELECT room_price_per_day, gst, hotel_type FROM bookings_info WHERE booking_id=?";
         String updateSql = """
                 UPDATE bookings_info SET
                 check_in_date=?, 
@@ -167,6 +141,7 @@ public class BookingHistoryHandler implements HttpHandler {
                 return;
             }
 
+            // Price calculation logic stays intact for Hotels
             double price = rs.getDouble("room_price_per_day") * days + rs.getDouble("gst");
 
             update.setDate(1, java.sql.Date.valueOf(in));
@@ -193,7 +168,6 @@ public class BookingHistoryHandler implements HttpHandler {
             return;
         }
 
-        // Explicit cast added for booking_status_enum
         String sql = "UPDATE bookings_info SET booking_status='CANCELLED'::booking_status_enum, refund_status='Refund Initiated' WHERE booking_id=?";
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
@@ -218,6 +192,9 @@ public class BookingHistoryHandler implements HttpHandler {
             Object value = rs.getObject(i);
             if (value instanceof java.sql.Date date)
                 value = date.toLocalDate().toString();
+            else if (value instanceof java.sql.Timestamp ts)
+                value = ts.toString();
+            
             row.put(meta.getColumnLabel(i), value);
         }
         return row;
@@ -241,10 +218,13 @@ public class BookingHistoryHandler implements HttpHandler {
 
     private void sendResponse(HttpExchange ex, int code, Object body) throws IOException {
         String json = body instanceof String ? (String) body : objectMapper.writeValueAsString(body);
-        ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
-        ex.sendResponseHeaders(code, json.getBytes(StandardCharsets.UTF_8).length);
-        try (OutputStream os = ex.getResponseBody()) { os.write(json.getBytes(StandardCharsets.UTF_8)); }
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        ex.sendResponseHeaders(code, bytes.length);
+        try (OutputStream os = ex.getResponseBody()) { 
+            os.write(bytes); 
+            os.flush();
+        }
     }
 
     private Map<String, Object> json(String k, Object v) {
