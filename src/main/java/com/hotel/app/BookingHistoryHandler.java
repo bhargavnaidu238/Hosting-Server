@@ -37,7 +37,7 @@ public class BookingHistoryHandler implements HttpHandler {
         switch (exchange.getRequestMethod().toUpperCase()) {
             case "GET" -> handleBookingHistory(exchange);
             case "PUT" -> handlePutRequests(exchange);
-            case "POST" -> handlePostRequests(exchange); // Handle the /customize call
+            case "POST" -> handlePostRequests(exchange);
             default -> sendResponse(exchange, 405, json("error", "Method Not Allowed"));
         }
     }
@@ -62,7 +62,7 @@ public class BookingHistoryHandler implements HttpHandler {
         }
     }
 
-    // -------------------- SAVE PREFERENCES LOGIC --------------------
+    // -------------------- SAVE & MERGE PREFERENCES logic --------------------
     private void handleUpdatePreferences(HttpExchange exchange) throws IOException {
         try {
             Map<String, Object> data = objectMapper.readValue(exchange.getRequestBody(), Map.class);
@@ -73,44 +73,38 @@ public class BookingHistoryHandler implements HttpHandler {
                 return;
             }
 
-            // 1. Fetch current preferences first to avoid overwriting
-            String selectSql = "SELECT * FROM user_info WHERE user_email = ?";
+            String selectSql = "SELECT stay_type, meal_preference, add_ons, travel_style, stay_preference, for_you, location_preference FROM user_info WHERE user_email = ?";
             
             try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
                 Map<String, String> currentPrefs = new HashMap<>();
+                
                 try (PreparedStatement selectStmt = conn.prepareStatement(selectSql)) {
                     selectStmt.setString(1, email);
-                    ResultSet rs = selectStmt.executeQuery();
-                    if (rs.next()) {
-                        currentPrefs.put("stay_type", rs.getString("stay_type"));
-                        currentPrefs.put("meal_preference", rs.getString("meal_preference"));
-                        currentPrefs.put("add_ons", rs.getString("add_ons"));
-                        currentPrefs.put("travel_style", rs.getString("travel_style"));
-                        currentPrefs.put("stay_preference", rs.getString("stay_preference"));
-                        currentPrefs.put("for_you", rs.getString("for_you"));
-                        currentPrefs.put("location_preference", rs.getString("location_preference"));
-                    } else {
-                        sendResponse(exchange, 404, json("error", "User profile not found"));
-                        return;
+                    try (ResultSet rs = selectStmt.executeQuery()) {
+                        if (rs.next()) {
+                            currentPrefs.put("stay_type", rs.getString("stay_type"));
+                            currentPrefs.put("meal_preference", rs.getString("meal_preference"));
+                            currentPrefs.put("add_ons", rs.getString("add_ons"));
+                            currentPrefs.put("travel_style", rs.getString("travel_style"));
+                            currentPrefs.put("stay_preference", rs.getString("stay_preference"));
+                            currentPrefs.put("for_you", rs.getString("for_you"));
+                            currentPrefs.put("location_preference", rs.getString("location_preference"));
+                        } else {
+                            sendResponse(exchange, 404, json("error", "User profile not found in database"));
+                            return;
+                        }
                     }
                 }
 
-                // 2. Merge existing data with new data
-                String sql = """
+                String updateSql = """
                     UPDATE user_info SET 
-                        stay_type = ?, 
-                        meal_preference = ?, 
-                        add_ons = ?, 
-                        travel_style = ?, 
-                        stay_preference = ?, 
-                        for_you = ?, 
-                        location_preference = ?,
-                        budget_min = ?,
-                        budget_max = ?
+                        stay_type = ?, meal_preference = ?, add_ons = ?, 
+                        travel_style = ?, stay_preference = ?, for_you = ?, 
+                        location_preference = ?, budget_min = ?, budget_max = ?
                     WHERE user_email = ?
                     """;
 
-                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                try (PreparedStatement stmt = conn.prepareStatement(updateSql)) {
                     stmt.setString(1, mergePreferences(currentPrefs.get("stay_type"), data.get("stay_type")));
                     stmt.setString(2, mergePreferences(currentPrefs.get("meal_preference"), data.get("meal_preference")));
                     stmt.setString(3, mergePreferences(currentPrefs.get("add_ons"), data.get("add_ons")));
@@ -119,69 +113,64 @@ public class BookingHistoryHandler implements HttpHandler {
                     stmt.setString(6, mergePreferences(currentPrefs.get("for_you"), data.get("for_you")));
                     stmt.setString(7, mergePreferences(currentPrefs.get("location_preference"), data.get("location_preference")));
                     
-                    // Numeric values usually overwrite rather than append
-                    stmt.setObject(8, data.get("budget_min"), Types.NUMERIC);
-                    stmt.setObject(9, data.get("budget_max"), Types.NUMERIC);
+                    // Numeric parsing to prevent 500 errors on budget
+                    stmt.setObject(8, parseDouble(data.get("budget_min")), Types.NUMERIC);
+                    stmt.setObject(9, parseDouble(data.get("budget_max")), Types.NUMERIC);
                     stmt.setString(10, email);
 
-                    int updated = stmt.executeUpdate();
-                    if (updated > 0) {
-                        sendResponse(exchange, 200, json("success", "Preferences merged and updated successfully"));
-                    } else {
-                        sendResponse(exchange, 500, json("error", "Failed to update record"));
-                    }
+                    int rows = stmt.executeUpdate();
+                    sendResponse(exchange, 200, json("success", "Preferences merged and saved"));
                 }
             }
         } catch (Exception e) {
-            sendResponse(exchange, 500, json("error", "Database Error: " + e.getMessage()));
+            e.printStackTrace(); // View this in your Java Console
+            sendResponse(exchange, 500, json("error", "Internal Server Error: " + e.getMessage()));
         }
     }
 
-    /**
-     * Helper method to merge existing comma-separated strings with new values.
-     * Prevents duplicate entries.
-     */
     private String mergePreferences(String existing, Object incoming) {
         String newItems = Objects.toString(incoming, "").trim();
-        if (newItems.isEmpty() || newItems.equals("null")) return existing;
+        if (newItems.isEmpty() || newItems.equalsIgnoreCase("null")) return existing;
         if (existing == null || existing.isEmpty()) return newItems;
 
-        // Split into sets to remove duplicates automatically
         Set<String> mergedSet = new LinkedHashSet<>();
-        
-        // Add existing items
+        // Split existing
         for (String s : existing.split(",")) {
             if (!s.trim().isEmpty()) mergedSet.add(s.trim());
         }
-        
-        // Add new items
+        // Split incoming
         for (String s : newItems.split(",")) {
             if (!s.trim().isEmpty()) mergedSet.add(s.trim());
         }
-
         return String.join(", ", mergedSet);
     }
 
-    // -------------------- REMAINING EXISTING METHODS --------------------
+    private Double parseDouble(Object val) {
+        if (val == null || val.toString().isEmpty() || val.toString().equalsIgnoreCase("null")) return null;
+        try {
+            return Double.parseDouble(val.toString());
+        } catch (Exception e) { return null; }
+    }
+
+    // -------------------- EXISTING HISTORY & ACTION LOGIC --------------------
 
     private void handleBookingHistory(HttpExchange exchange) throws IOException {
         Map<String, String> params = decodeParams(exchange.getRequestURI().getQuery());
         String email = params.getOrDefault("email", "").trim();
         String userId = params.getOrDefault("userId", "").trim();
 
-        String sql = "SELECT * FROM bookings_info WHERE (email=? OR user_id=?) ORDER BY payment_confirmed_at DESC, check_in_date DESC";
+        String sql = "SELECT * FROM bookings_info WHERE (email=? OR user_id=?) ORDER BY payment_confirmed_at DESC";
         List<Map<String, Object>> results = new ArrayList<>();
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, email);
             stmt.setString(2, userId);
-            ResultSet rs = stmt.executeQuery();
-            while (rs.next()) { results.add(mapRow(rs)); }
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) { results.add(mapRow(rs)); }
+            }
             sendResponse(exchange, 200, results);
-        } catch (Exception e) {
-            sendResponse(exchange, 500, json("error", e.getMessage()));
-        }
+        } catch (Exception e) { sendResponse(exchange, 500, json("error", e.getMessage())); }
     }
 
     private void handleUpdateBookingDates(HttpExchange exchange) throws IOException {
@@ -194,20 +183,22 @@ public class BookingHistoryHandler implements HttpHandler {
         String update = "UPDATE bookings_info SET check_in_date=?, check_out_date=?, total_days_at_stay=?, final_payable_amount=? WHERE booking_id=?";
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
-             PreparedStatement fStmt = conn.prepareStatement(fetch);
-             PreparedStatement uStmt = conn.prepareStatement(update)) {
+             PreparedStatement fStmt = conn.prepareStatement(fetch)) {
             fStmt.setString(1, bookingId);
-            ResultSet rs = fStmt.executeQuery();
-            if (rs.next()) {
-                long days = ChronoUnit.DAYS.between(LocalDate.parse(newIn), LocalDate.parse(newOut));
-                double price = (rs.getDouble("room_price_per_day") * days) + rs.getDouble("gst");
-                uStmt.setDate(1, java.sql.Date.valueOf(newIn));
-                uStmt.setDate(2, java.sql.Date.valueOf(newOut));
-                uStmt.setInt(3, (int) days);
-                uStmt.setDouble(4, price);
-                uStmt.setString(5, bookingId);
-                uStmt.executeUpdate();
-                sendResponse(exchange, 200, json("success", "Dates updated"));
+            try (ResultSet rs = fStmt.executeQuery()) {
+                if (rs.next()) {
+                    long days = ChronoUnit.DAYS.between(LocalDate.parse(newIn), LocalDate.parse(newOut));
+                    double price = (rs.getDouble("room_price_per_day") * days) + rs.getDouble("gst");
+                    try (PreparedStatement uStmt = conn.prepareStatement(update)) {
+                        uStmt.setDate(1, java.sql.Date.valueOf(newIn));
+                        uStmt.setDate(2, java.sql.Date.valueOf(newOut));
+                        uStmt.setInt(3, (int) days);
+                        uStmt.setDouble(4, price);
+                        uStmt.setString(5, bookingId);
+                        uStmt.executeUpdate();
+                        sendResponse(exchange, 200, json("success", "Dates updated"));
+                    }
+                }
             }
         } catch (Exception e) { sendResponse(exchange, 500, json("error", e.getMessage())); }
     }
