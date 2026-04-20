@@ -73,7 +73,7 @@ public class BookingHistoryHandler implements HttpHandler {
                 return;
             }
 
-            String selectSql = "SELECT stay_type, meal_preference, add_ons, travel_style, stay_preference, for_you, location_preference FROM user_info WHERE user_email = ?";
+            String selectSql = "SELECT meal_preference, add_ons, travel_style, stay_preference, for_you, location_preference FROM user_info WHERE user_email = ?";
             
             try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
                 Map<String, String> currentPrefs = new HashMap<>();
@@ -82,7 +82,6 @@ public class BookingHistoryHandler implements HttpHandler {
                     selectStmt.setString(1, email);
                     try (ResultSet rs = selectStmt.executeQuery()) {
                         if (rs.next()) {
-                            currentPrefs.put("stay_type", rs.getString("stay_type"));
                             currentPrefs.put("meal_preference", rs.getString("meal_preference"));
                             currentPrefs.put("add_ons", rs.getString("add_ons"));
                             currentPrefs.put("travel_style", rs.getString("travel_style"));
@@ -90,7 +89,7 @@ public class BookingHistoryHandler implements HttpHandler {
                             currentPrefs.put("for_you", rs.getString("for_you"));
                             currentPrefs.put("location_preference", rs.getString("location_preference"));
                         } else {
-                            sendResponse(exchange, 404, json("error", "User profile not found in database"));
+                            sendResponse(exchange, 404, json("error", "User profile not found"));
                             return;
                         }
                     }
@@ -105,7 +104,8 @@ public class BookingHistoryHandler implements HttpHandler {
                     """;
 
                 try (PreparedStatement stmt = conn.prepareStatement(updateSql)) {
-                    stmt.setString(1, mergePreferences(currentPrefs.get("stay_type"), data.get("stay_type")));
+                    // Logic update: stay_type is overwritten (Hotel or Resort), others are merged
+                    stmt.setString(1, Objects.toString(data.get("stay_type"), "Hotel")); 
                     stmt.setString(2, mergePreferences(currentPrefs.get("meal_preference"), data.get("meal_preference")));
                     stmt.setString(3, mergePreferences(currentPrefs.get("add_ons"), data.get("add_ons")));
                     stmt.setString(4, mergePreferences(currentPrefs.get("travel_style"), data.get("travel_style")));
@@ -113,18 +113,18 @@ public class BookingHistoryHandler implements HttpHandler {
                     stmt.setString(6, mergePreferences(currentPrefs.get("for_you"), data.get("for_you")));
                     stmt.setString(7, mergePreferences(currentPrefs.get("location_preference"), data.get("location_preference")));
                     
-                    // Numeric parsing to prevent 500 errors on budget
+                    // Critical Fix: Explicit Types.NUMERIC prevents 500 errors on nulls or string-numbers
                     stmt.setObject(8, parseDouble(data.get("budget_min")), Types.NUMERIC);
                     stmt.setObject(9, parseDouble(data.get("budget_max")), Types.NUMERIC);
                     stmt.setString(10, email);
 
-                    int rows = stmt.executeUpdate();
+                    stmt.executeUpdate();
                     sendResponse(exchange, 200, json("success", "Preferences merged and saved"));
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace(); // View this in your Java Console
-            sendResponse(exchange, 500, json("error", "Internal Server Error: " + e.getMessage()));
+            e.printStackTrace();
+            sendResponse(exchange, 500, json("error", "Database Error: " + e.getMessage()));
         }
     }
 
@@ -133,12 +133,11 @@ public class BookingHistoryHandler implements HttpHandler {
         if (newItems.isEmpty() || newItems.equalsIgnoreCase("null")) return existing;
         if (existing == null || existing.isEmpty()) return newItems;
 
+        // Use LinkedHashSet to maintain order and remove duplicates
         Set<String> mergedSet = new LinkedHashSet<>();
-        // Split existing
         for (String s : existing.split(",")) {
             if (!s.trim().isEmpty()) mergedSet.add(s.trim());
         }
-        // Split incoming
         for (String s : newItems.split(",")) {
             if (!s.trim().isEmpty()) mergedSet.add(s.trim());
         }
@@ -152,7 +151,7 @@ public class BookingHistoryHandler implements HttpHandler {
         } catch (Exception e) { return null; }
     }
 
-    // -------------------- EXISTING HISTORY & ACTION LOGIC --------------------
+    // -------------------- EXISTING METHODS (HISTORY / PUT) --------------------
 
     private void handleBookingHistory(HttpExchange exchange) throws IOException {
         Map<String, String> params = decodeParams(exchange.getRequestURI().getQuery());
@@ -232,7 +231,8 @@ public class BookingHistoryHandler implements HttpHandler {
         if (query == null) return map;
         for (String p : query.split("&")) {
             String[] pair = p.split("=", 2);
-            if (pair.length == 2) map.put(URLDecoder.decode(pair[0], StandardCharsets.UTF_8), URLDecoder.decode(pair[1], StandardCharsets.UTF_8).trim());
+            if (pair.length == 2) map.put(URLDecoder.decode(pair[0], StandardCharsets.UTF_8), 
+                                         URLDecoder.decode(pair[1], StandardCharsets.UTF_8).trim());
         }
         return map;
     }
