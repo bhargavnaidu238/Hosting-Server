@@ -73,46 +73,93 @@ public class BookingHistoryHandler implements HttpHandler {
                 return;
             }
 
-            String sql = """
-                UPDATE user_info SET 
-                    stay_type = ?, 
-                    meal_preference = ?, 
-                    add_ons = ?, 
-                    travel_style = ?, 
-                    stay_preference = ?, 
-                    for_you = ?, 
-                    location_preference = ?,
-                    budget_min = ?,
-                    budget_max = ?
-                WHERE user_email = ?
-                """;
+            // 1. Fetch current preferences first to avoid overwriting
+            String selectSql = "SELECT * FROM user_info WHERE user_email = ?";
+            
+            try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
+                Map<String, String> currentPrefs = new HashMap<>();
+                try (PreparedStatement selectStmt = conn.prepareStatement(selectSql)) {
+                    selectStmt.setString(1, email);
+                    ResultSet rs = selectStmt.executeQuery();
+                    if (rs.next()) {
+                        currentPrefs.put("stay_type", rs.getString("stay_type"));
+                        currentPrefs.put("meal_preference", rs.getString("meal_preference"));
+                        currentPrefs.put("add_ons", rs.getString("add_ons"));
+                        currentPrefs.put("travel_style", rs.getString("travel_style"));
+                        currentPrefs.put("stay_preference", rs.getString("stay_preference"));
+                        currentPrefs.put("for_you", rs.getString("for_you"));
+                        currentPrefs.put("location_preference", rs.getString("location_preference"));
+                    } else {
+                        sendResponse(exchange, 404, json("error", "User profile not found"));
+                        return;
+                    }
+                }
 
-            try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
-                 PreparedStatement stmt = conn.prepareStatement(sql)) {
-                
-                stmt.setString(1, Objects.toString(data.get("stay_type"), null));
-                stmt.setString(2, Objects.toString(data.get("meal_preference"), null));
-                stmt.setString(3, Objects.toString(data.get("add_ons"), null));
-                stmt.setString(4, Objects.toString(data.get("travel_style"), null));
-                stmt.setString(5, Objects.toString(data.get("stay_preference"), null));
-                stmt.setString(6, Objects.toString(data.get("for_you"), null));
-                stmt.setString(7, Objects.toString(data.get("location_preference"), null));
-                
-                // Handle Numeric/Budget values safely
-                stmt.setObject(8, data.get("budget_min"), Types.NUMERIC);
-                stmt.setObject(9, data.get("budget_max"), Types.NUMERIC);
-                stmt.setString(10, email);
+                // 2. Merge existing data with new data
+                String sql = """
+                    UPDATE user_info SET 
+                        stay_type = ?, 
+                        meal_preference = ?, 
+                        add_ons = ?, 
+                        travel_style = ?, 
+                        stay_preference = ?, 
+                        for_you = ?, 
+                        location_preference = ?,
+                        budget_min = ?,
+                        budget_max = ?
+                    WHERE user_email = ?
+                    """;
 
-                int updated = stmt.executeUpdate();
-                if (updated > 0) {
-                    sendResponse(exchange, 200, json("success", "Preferences updated successfully"));
-                } else {
-                    sendResponse(exchange, 404, json("error", "User profile not found"));
+                try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+                    stmt.setString(1, mergePreferences(currentPrefs.get("stay_type"), data.get("stay_type")));
+                    stmt.setString(2, mergePreferences(currentPrefs.get("meal_preference"), data.get("meal_preference")));
+                    stmt.setString(3, mergePreferences(currentPrefs.get("add_ons"), data.get("add_ons")));
+                    stmt.setString(4, mergePreferences(currentPrefs.get("travel_style"), data.get("travel_style")));
+                    stmt.setString(5, mergePreferences(currentPrefs.get("stay_preference"), data.get("stay_preference")));
+                    stmt.setString(6, mergePreferences(currentPrefs.get("for_you"), data.get("for_you")));
+                    stmt.setString(7, mergePreferences(currentPrefs.get("location_preference"), data.get("location_preference")));
+                    
+                    // Numeric values usually overwrite rather than append
+                    stmt.setObject(8, data.get("budget_min"), Types.NUMERIC);
+                    stmt.setObject(9, data.get("budget_max"), Types.NUMERIC);
+                    stmt.setString(10, email);
+
+                    int updated = stmt.executeUpdate();
+                    if (updated > 0) {
+                        sendResponse(exchange, 200, json("success", "Preferences merged and updated successfully"));
+                    } else {
+                        sendResponse(exchange, 500, json("error", "Failed to update record"));
+                    }
                 }
             }
         } catch (Exception e) {
             sendResponse(exchange, 500, json("error", "Database Error: " + e.getMessage()));
         }
+    }
+
+    /**
+     * Helper method to merge existing comma-separated strings with new values.
+     * Prevents duplicate entries.
+     */
+    private String mergePreferences(String existing, Object incoming) {
+        String newItems = Objects.toString(incoming, "").trim();
+        if (newItems.isEmpty() || newItems.equals("null")) return existing;
+        if (existing == null || existing.isEmpty()) return newItems;
+
+        // Split into sets to remove duplicates automatically
+        Set<String> mergedSet = new LinkedHashSet<>();
+        
+        // Add existing items
+        for (String s : existing.split(",")) {
+            if (!s.trim().isEmpty()) mergedSet.add(s.trim());
+        }
+        
+        // Add new items
+        for (String s : newItems.split(",")) {
+            if (!s.trim().isEmpty()) mergedSet.add(s.trim());
+        }
+
+        return String.join(", ", mergedSet);
     }
 
     // -------------------- REMAINING EXISTING METHODS --------------------
