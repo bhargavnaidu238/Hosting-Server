@@ -22,6 +22,7 @@ import com.hotel.app.ProfileHandler;
 import com.hotel.app.RegisterHandler;
 import com.hotel.app.ReviewsHandler;
 import com.hotel.app.RewardsWalletHandler;
+import com.hotel.app.UserPreferenceHandler;
 import com.hotel.notification.service.EmailHandler;
 import com.hotel.utilities.DbConfig;
 import com.hotel.utilities.HotelImagesHandler;
@@ -73,6 +74,7 @@ public class HotelBookingServer {
         server.createContext("/cancel-booking", new BookingHistoryHandler(dbConfig));
         server.createContext("/update-booking-dates", new BookingHistoryHandler(dbConfig));
         server.createContext("/filterHotels", new AppFilterHandler(dbConfig));
+        server.createContext("/customize", new BookingHistoryHandler(dbConfig));
         
         // ========== WALLET & PAYMENTS ==========
         server.createContext("/wallet", new RewardsWalletHandler(dbConfig));
