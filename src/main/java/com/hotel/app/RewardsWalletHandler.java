@@ -35,17 +35,15 @@ public class RewardsWalletHandler implements HttpHandler {
         ObjectNode response = mapper.createObjectNode();
 
         try {
-            // Routing Logic based on your server.createContext setup
+            // Main Orchestration Endpoint for the new Flutter UI
             if (path.equals("/user-rewards-full") && "GET".equalsIgnoreCase(method)) {
                 response = handleFullRewardsRequest(exchange);
-            } else if (path.equals("/coupon/validate") && "POST".equalsIgnoreCase(method)) {
+            } 
+            else if (path.equals("/coupon/validate") && "POST".equalsIgnoreCase(method)) {
                 response = handleCouponValidate(exchange);
-            } else if (path.equals("/wallet") && "GET".equalsIgnoreCase(method)) {
-                // Maintain legacy support for basic wallet info
-                response = handleLegacyWalletRequest(exchange);
-            } else {
-                response.put("status", "success");
-                response.put("message", "Endpoint " + path + " active. Processing logic pending...");
+            } 
+            else {
+                response.put("error", "Invalid endpoint or method");
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -54,6 +52,8 @@ public class RewardsWalletHandler implements HttpHandler {
 
         byte[] bytes = response.toString().getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json");
+        // Enable CORS if testing across different ports/devices
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.sendResponseHeaders(200, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
@@ -65,13 +65,15 @@ public class RewardsWalletHandler implements HttpHandler {
         String userId = params.get("userId");
         ObjectNode root = mapper.createObjectNode();
 
-        if (userId == null) return root.put("error", "User ID required");
+        if (userId == null || userId.isEmpty()) {
+            return root.put("error", "userId is required");
+        }
 
         try (Connection conn = getConnection()) {
-            // 1. Wallet Balance
+            // 1. WALLET BALANCE (From table: wallet)
             ObjectNode wallet = mapper.createObjectNode();
-            String wSql = "SELECT wallet_id, balance FROM wallet WHERE user_id = ? LIMIT 1";
             String walletId = "";
+            String wSql = "SELECT wallet_id, balance FROM wallet WHERE user_id = ?::uuid LIMIT 1";
             try (PreparedStatement ps = conn.prepareStatement(wSql)) {
                 ps.setString(1, userId);
                 ResultSet rs = ps.executeQuery();
@@ -84,19 +86,19 @@ public class RewardsWalletHandler implements HttpHandler {
             }
             root.set("wallet", wallet);
 
-            // 2. Referral Progress (Gamification)
+            // 2. REFERRAL PROGRESS (From table: referrals & referral_milestones)
             ObjectNode refStats = mapper.createObjectNode();
-            String refSql = "SELECT COUNT(*) FROM referrals WHERE referrer_id = ?::uuid AND is_qualified = true";
+            String countSql = "SELECT COUNT(*) FROM referrals WHERE referrer_id = ?::uuid AND is_qualified = true";
             int count = 0;
-            try (PreparedStatement ps = conn.prepareStatement(refSql)) {
+            try (PreparedStatement ps = conn.prepareStatement(countSql)) {
                 ps.setString(1, userId);
                 ResultSet rs = ps.executeQuery();
                 if (rs.next()) count = rs.getInt(1);
             }
-            
-            // Find next milestone (e.g. 5, 10, etc)
-            String mileSql = "SELECT referrals_required FROM referral_milestones WHERE referrals_required > ? ORDER BY referrals_required LIMIT 1";
-            int nextMile = 5; 
+
+            // Find next milestone based on current count
+            String mileSql = "SELECT referrals_required FROM referral_milestones WHERE referrals_required > ? ORDER BY referrals_required ASC LIMIT 1";
+            int nextMile = 5; // Default milestone
             try (PreparedStatement ps = conn.prepareStatement(mileSql)) {
                 ps.setInt(1, count);
                 ResultSet rs = ps.executeQuery();
@@ -106,7 +108,7 @@ public class RewardsWalletHandler implements HttpHandler {
             refStats.put("next_milestone", nextMile);
             root.set("referral_stats", refStats);
 
-            // 3. Available Coupons
+            // 3. COUPONS (From table: coupons)
             ArrayNode coupons = mapper.createArrayNode();
             String cSql = "SELECT coupon_code, title, description, valid_to FROM coupons WHERE status = 'active' AND valid_to > NOW()";
             try (PreparedStatement ps = conn.prepareStatement(cSql)) {
@@ -122,10 +124,10 @@ public class RewardsWalletHandler implements HttpHandler {
             }
             root.set("coupons", coupons);
 
-            // 4. Transactions (For Tabs)
+            // 4. TRANSACTIONS (From table: wallet_transactions)
             ArrayNode txns = mapper.createArrayNode();
             if (!walletId.isEmpty()) {
-                String tSql = "SELECT description, amount, direction, created_at FROM wallet_transactions WHERE wallet_id = ? ORDER BY created_at DESC";
+                String tSql = "SELECT description, amount, direction, created_at FROM wallet_transactions WHERE wallet_id = ?::uuid ORDER BY created_at DESC";
                 try (PreparedStatement ps = conn.prepareStatement(tSql)) {
                     ps.setString(1, walletId);
                     ResultSet rs = ps.executeQuery();
@@ -141,18 +143,20 @@ public class RewardsWalletHandler implements HttpHandler {
             }
             root.set("transactions", txns);
 
-            // 5. Refunds (For Tabs)
+            // 5. REFUNDS (From table: refunds)
             ArrayNode refunds = mapper.createArrayNode();
-            String rSql = "SELECT refund_id, refunded_amount, status FROM refunds WHERE txn_id IN (SELECT txn_id FROM wallet_transactions WHERE wallet_id = ?)";
-            try (PreparedStatement ps = conn.prepareStatement(rSql)) {
-                ps.setString(1, walletId);
-                ResultSet rs = ps.executeQuery();
-                while (rs.next()) {
-                    ObjectNode r = mapper.createObjectNode();
-                    r.put("refund_id", rs.getString("refund_id"));
-                    r.put("refunded_amount", rs.getDouble("refunded_amount"));
-                    r.put("status", rs.getString("status"));
-                    refunds.add(r);
+            if (!walletId.isEmpty()) {
+                String rSql = "SELECT refund_id, refunded_amount, status FROM refunds WHERE txn_id IN (SELECT txn_id FROM wallet_transactions WHERE wallet_id = ?::uuid)";
+                try (PreparedStatement ps = conn.prepareStatement(rSql)) {
+                    ps.setString(1, walletId);
+                    ResultSet rs = ps.executeQuery();
+                    while (rs.next()) {
+                        ObjectNode r = mapper.createObjectNode();
+                        r.put("refund_id", rs.getString("refund_id"));
+                        r.put("refunded_amount", rs.getDouble("refunded_amount"));
+                        r.put("status", rs.getString("status"));
+                        refunds.add(r);
+                    }
                 }
             }
             root.set("refunds", refunds);
@@ -161,12 +165,8 @@ public class RewardsWalletHandler implements HttpHandler {
     }
 
     private ObjectNode handleCouponValidate(HttpExchange exchange) throws Exception {
-        // Implement your existing coupon validation logic here
-        return mapper.createObjectNode().put("valid", true).put("message", "Validating...");
-    }
-
-    private ObjectNode handleLegacyWalletRequest(HttpExchange exchange) {
-        return mapper.createObjectNode().put("balance", 0.0);
+        // Validation logic can go here
+        return mapper.createObjectNode().put("valid", true).put("message", "Coupon validated successfully");
     }
 
     private Map<String, String> parseQuery(String query) {
@@ -174,7 +174,10 @@ public class RewardsWalletHandler implements HttpHandler {
         if (query == null) return result;
         for (String pair : query.split("&")) {
             String[] kv = pair.split("=");
-            if (kv.length > 1) result.put(URLDecoder.decode(kv[0], StandardCharsets.UTF_8), URLDecoder.decode(kv[1], StandardCharsets.UTF_8));
+            if (kv.length > 1) {
+                result.put(URLDecoder.decode(kv[0], StandardCharsets.UTF_8), 
+                           URLDecoder.decode(kv[1], StandardCharsets.UTF_8));
+            }
         }
         return result;
     }

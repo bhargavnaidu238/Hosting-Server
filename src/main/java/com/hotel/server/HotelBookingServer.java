@@ -77,6 +77,7 @@ public class HotelBookingServer {
         server.createContext("/customize", new BookingHistoryHandler(dbConfig));
         
         // ========== WALLET & PAYMENTS ==========
+        server.createContext("/user-rewards-full", new RewardsWalletHandler(dbConfig));
         server.createContext("/wallet", new RewardsWalletHandler(dbConfig));
         server.createContext("/wallet/deposit", new RewardsWalletHandler(dbConfig));
         server.createContext("/wallet/pay", new RewardsWalletHandler(dbConfig));
