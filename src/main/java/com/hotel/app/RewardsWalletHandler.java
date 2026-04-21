@@ -35,7 +35,6 @@ public class RewardsWalletHandler implements HttpHandler {
         ObjectNode response = mapper.createObjectNode();
 
         try {
-            // Main Orchestration Endpoint for the revamped Flutter UI
             if (path.equals("/user-rewards-full") && "GET".equalsIgnoreCase(method)) {
                 response = handleFullRewardsRequest(exchange);
             } 
@@ -69,7 +68,7 @@ public class RewardsWalletHandler implements HttpHandler {
         }
 
         try (Connection conn = getConnection()) {
-            // 1. WALLET BALANCE (Table: wallets - Column: user_id is character)
+            // 1. WALLET BALANCE
             ObjectNode wallet = mapper.createObjectNode();
             String walletId = "";
             String wSql = "SELECT wallet_id, balance FROM wallets WHERE user_id = ? LIMIT 1";
@@ -85,10 +84,9 @@ public class RewardsWalletHandler implements HttpHandler {
             }
             root.set("wallet", wallet);
 
-            // 2. REFERRAL PROGRESS (Table: referrals - Column: referrer_id is UUID)
-            // Note: If your app uses "CR..." IDs for referrals too, you must remove ::uuid here as well.
+            // 2. REFERRAL PROGRESS (FIXED: Removed ::uuid cast here)
             ObjectNode refStats = mapper.createObjectNode();
-            String countSql = "SELECT COUNT(*) FROM referrals WHERE referrer_id = ?::uuid AND is_qualified = true";
+            String countSql = "SELECT COUNT(*) FROM referrals WHERE referrer_id = ? AND is_qualified = true";
             int count = 0;
             try (PreparedStatement ps = conn.prepareStatement(countSql)) {
                 ps.setString(1, userId);
@@ -96,9 +94,8 @@ public class RewardsWalletHandler implements HttpHandler {
                 if (rs.next()) count = rs.getInt(1);
             }
 
-            // Find next milestone based on current count
             String mileSql = "SELECT referrals_required FROM referral_milestones WHERE referrals_required > ? ORDER BY referrals_required ASC LIMIT 1";
-            int nextMile = 5; // Default fallback
+            int nextMile = 5; 
             try (PreparedStatement ps = conn.prepareStatement(mileSql)) {
                 ps.setInt(1, count);
                 ResultSet rs = ps.executeQuery();
@@ -108,7 +105,7 @@ public class RewardsWalletHandler implements HttpHandler {
             refStats.put("next_milestone", nextMile);
             root.set("referral_stats", refStats);
 
-            // 3. COUPONS (Table: coupons)
+            // 3. COUPONS
             ArrayNode coupons = mapper.createArrayNode();
             String cSql = "SELECT coupon_code, title, description, valid_to FROM coupons WHERE status = 'active' AND valid_to > NOW()";
             try (PreparedStatement ps = conn.prepareStatement(cSql)) {
@@ -124,7 +121,7 @@ public class RewardsWalletHandler implements HttpHandler {
             }
             root.set("coupons", coupons);
 
-            // 4. TRANSACTIONS (Table: wallet_transactions - Column: wallet_id is character)
+            // 4. TRANSACTIONS
             ArrayNode txns = mapper.createArrayNode();
             if (!walletId.isEmpty()) {
                 String tSql = "SELECT description, amount, direction, created_at FROM wallet_transactions WHERE wallet_id = ? ORDER BY created_at DESC";
@@ -143,7 +140,7 @@ public class RewardsWalletHandler implements HttpHandler {
             }
             root.set("transactions", txns);
 
-            // 5. REFUNDS (Table: refunds)
+            // 5. REFUNDS
             ArrayNode refunds = mapper.createArrayNode();
             if (!walletId.isEmpty()) {
                 String rSql = "SELECT refund_id, refunded_amount, status FROM refunds WHERE txn_id IN (SELECT txn_id FROM wallet_transactions WHERE wallet_id = ?)";
