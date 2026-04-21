@@ -73,7 +73,7 @@ public class RewardsWalletHandler implements HttpHandler {
             // 1. WALLET BALANCE (From table: wallet)
             ObjectNode wallet = mapper.createObjectNode();
             String walletId = "";
-            String wSql = "SELECT wallet_id, balance FROM wallet WHERE user_id = ?::uuid LIMIT 1";
+            String wSql = "SELECT wallet_id, balance FROM wallets WHERE user_id = ?::uuid LIMIT 1";
             try (PreparedStatement ps = conn.prepareStatement(wSql)) {
                 ps.setString(1, userId);
                 ResultSet rs = ps.executeQuery();
