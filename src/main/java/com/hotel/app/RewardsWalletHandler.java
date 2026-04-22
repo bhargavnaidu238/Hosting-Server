@@ -68,7 +68,18 @@ public class RewardsWalletHandler implements HttpHandler {
         }
 
         try (Connection conn = getConnection()) {
-            // 1. WALLET BALANCE
+            
+            // 1. FETCH USER REFERRAL CODE (From user_info)
+            String userSql = "SELECT referral_code FROM user_info WHERE user_id = ?";
+            try (PreparedStatement ps = conn.prepareStatement(userSql)) {
+                ps.setString(1, userId);
+                ResultSet rs = ps.executeQuery();
+                if (rs.next()) {
+                    root.put("referral_code", rs.getString("referral_code"));
+                }
+            }
+
+            // 2. WALLET BALANCE
             ObjectNode wallet = mapper.createObjectNode();
             String walletId = "";
             String wSql = "SELECT wallet_id, balance FROM wallets WHERE user_id = ? LIMIT 1";
@@ -84,7 +95,7 @@ public class RewardsWalletHandler implements HttpHandler {
             }
             root.set("wallet", wallet);
 
-            // 2. REFERRAL PROGRESS (FIXED: Removed ::uuid cast here)
+            // 3. REFERRAL PROGRESS (Qualified only)
             ObjectNode refStats = mapper.createObjectNode();
             String countSql = "SELECT COUNT(*) FROM referrals WHERE referrer_id = ? AND is_qualified = true";
             int count = 0;
@@ -99,13 +110,15 @@ public class RewardsWalletHandler implements HttpHandler {
             try (PreparedStatement ps = conn.prepareStatement(mileSql)) {
                 ps.setInt(1, count);
                 ResultSet rs = ps.executeQuery();
-                if (rs.next()) nextMile = rs.getInt(1);
+                if (rs.next()) {
+                    nextMile = rs.getInt(1);
+                }
             }
             refStats.put("completed_count", count);
             refStats.put("next_milestone", nextMile);
             root.set("referral_stats", refStats);
 
-            // 3. COUPONS
+            // 4. COUPONS
             ArrayNode coupons = mapper.createArrayNode();
             String cSql = "SELECT coupon_code, title, description, valid_to FROM coupons WHERE status = 'active' AND valid_to > NOW()";
             try (PreparedStatement ps = conn.prepareStatement(cSql)) {
@@ -121,7 +134,7 @@ public class RewardsWalletHandler implements HttpHandler {
             }
             root.set("coupons", coupons);
 
-            // 4. TRANSACTIONS
+            // 5. TRANSACTIONS (Activity Tab)
             ArrayNode txns = mapper.createArrayNode();
             if (!walletId.isEmpty()) {
                 String tSql = "SELECT description, amount, direction, created_at FROM wallet_transactions WHERE wallet_id = ? ORDER BY created_at DESC";
@@ -140,7 +153,7 @@ public class RewardsWalletHandler implements HttpHandler {
             }
             root.set("transactions", txns);
 
-            // 5. REFUNDS
+            // 6. REFUNDS (Refunds Tab)
             ArrayNode refunds = mapper.createArrayNode();
             if (!walletId.isEmpty()) {
                 String rSql = "SELECT refund_id, refunded_amount, status FROM refunds WHERE txn_id IN (SELECT txn_id FROM wallet_transactions WHERE wallet_id = ?)";
