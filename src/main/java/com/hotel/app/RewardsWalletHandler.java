@@ -60,7 +60,7 @@ public class RewardsWalletHandler implements HttpHandler {
 
     private ObjectNode handleFullRewardsRequest(HttpExchange exchange) throws Exception {
         Map<String, String> params = parseQuery(exchange.getRequestURI().getQuery());
-        String userId = params.get("userId");
+        String userId = (params.get("userId") != null) ? params.get("userId").trim() : null;
         ObjectNode root = mapper.createObjectNode();
 
         if (userId == null || userId.isEmpty()) {
@@ -69,23 +69,23 @@ public class RewardsWalletHandler implements HttpHandler {
 
         try (Connection conn = getConnection()) {
             
-            // 1. FETCH USER REFERRAL CODE (Crucial for the Flutter "Invite" card)
-            String userSql = "SELECT referral_code FROM user_info WHERE user_id = ?";
+            // 1. FETCH USER REFERRAL CODE (Fix: Using TRIM to handle DB space padding)
+            String userSql = "SELECT referral_code FROM user_info WHERE TRIM(user_id) = TRIM(?)";
             try (PreparedStatement ps = conn.prepareStatement(userSql)) {
                 ps.setString(1, userId);
                 ResultSet rs = ps.executeQuery();
                 if (rs.next()) {
                     String code = rs.getString("referral_code");
-                    root.put("referral_code", (code != null) ? code : "N/A");
+                    root.put("referral_code", (code != null && !code.trim().isEmpty()) ? code.trim() : "N/A");
                 } else {
-                    root.put("referral_code", "N/A");
+                    root.put("referral_code", "NOT_FOUND");
                 }
             }
 
             // 2. WALLET BALANCE
             ObjectNode wallet = mapper.createObjectNode();
             String walletId = "";
-            String wSql = "SELECT wallet_id, balance FROM wallets WHERE user_id = ? LIMIT 1";
+            String wSql = "SELECT wallet_id, balance FROM wallets WHERE TRIM(user_id) = TRIM(?) LIMIT 1";
             try (PreparedStatement ps = conn.prepareStatement(wSql)) {
                 ps.setString(1, userId);
                 ResultSet rs = ps.executeQuery();
@@ -98,9 +98,9 @@ public class RewardsWalletHandler implements HttpHandler {
             }
             root.set("wallet", wallet);
 
-            // 3. REFERRAL PROGRESS (Logic: Count friends who completed a booking)
+            // 3. REFERRAL PROGRESS (Logic: Count qualified friends)
             ObjectNode refStats = mapper.createObjectNode();
-            String countSql = "SELECT COUNT(*) FROM referrals WHERE referrer_id = ? AND is_qualified = true";
+            String countSql = "SELECT COUNT(*) FROM referrals WHERE TRIM(referrer_id) = TRIM(?) AND is_qualified = true";
             int count = 0;
             try (PreparedStatement ps = conn.prepareStatement(countSql)) {
                 ps.setString(1, userId);
@@ -108,9 +108,9 @@ public class RewardsWalletHandler implements HttpHandler {
                 if (rs.next()) count = rs.getInt(1);
             }
 
-            // Get next milestone from DB
+            // Get next milestone
             String mileSql = "SELECT referrals_required FROM referral_milestones WHERE referrals_required > ? ORDER BY referrals_required ASC LIMIT 1";
-            int nextMile = 5; // Fallback default
+            int nextMile = 5; 
             try (PreparedStatement ps = conn.prepareStatement(mileSql)) {
                 ps.setInt(1, count);
                 ResultSet rs = ps.executeQuery();
@@ -122,7 +122,7 @@ public class RewardsWalletHandler implements HttpHandler {
             refStats.put("next_milestone", nextMile);
             root.set("referral_stats", refStats);
 
-            // 4. COUPONS (Only active and not expired)
+            // 4. COUPONS
             ArrayNode coupons = mapper.createArrayNode();
             String cSql = "SELECT coupon_code, title, description, valid_to FROM coupons WHERE status = 'active' AND valid_to > NOW()";
             try (PreparedStatement ps = conn.prepareStatement(cSql)) {
@@ -138,7 +138,7 @@ public class RewardsWalletHandler implements HttpHandler {
             }
             root.set("coupons", coupons);
 
-            // 5. TRANSACTIONS (Populates the Flutter Activity Tab)
+            // 5. TRANSACTIONS
             ArrayNode txns = mapper.createArrayNode();
             if (!walletId.isEmpty()) {
                 String tSql = "SELECT description, amount, direction, created_at FROM wallet_transactions WHERE wallet_id = ? ORDER BY created_at DESC";
