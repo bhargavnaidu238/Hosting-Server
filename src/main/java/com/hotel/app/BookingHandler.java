@@ -86,8 +86,9 @@ public class BookingHandler implements HttpHandler {
             return;
         }
 
+        // UPDATED: Added UPPER() to handle case-insensitive matching at the DB level
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
-             PreparedStatement ps = conn.prepareStatement("SELECT * FROM coupons WHERE coupon_code = ? AND status = 'active'")) {
+             PreparedStatement ps = conn.prepareStatement("SELECT * FROM coupons WHERE UPPER(coupon_code) = UPPER(?) AND status = 'active'")) {
             ps.setString(1, code);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
@@ -135,7 +136,7 @@ public class BookingHandler implements HttpHandler {
         String paymentStatus = normalizePaymentStatus(str(data.get("payment_status")));
         String bookingStatus = str(data.getOrDefault("booking_status", "PENDING")).toUpperCase();
 
-        double walletRequested = toDouble(data.get("wallet_amount"));
+        double walletRequested = toDouble(data.get("wallet_amount_deducted"));
         boolean walletUsedFlag = "Yes".equalsIgnoreCase(str(data.get("wallet_used")));
 
         String couponCode = str(data.get("coupon_code"));
@@ -143,24 +144,6 @@ public class BookingHandler implements HttpHandler {
 
         double actualWalletDebited = 0;
         Connection conn = null;
-
-        String partnerEmailForMail = null;
-        String partnerNameForMail = "Partner";
-
-        try (Connection partnerLookupConn = dbConfig.getPartnerDataSource().getConnection()) {
-            String lookupSql = "SELECT email, partner_name FROM partner_data WHERE partner_id = ?";
-            try (PreparedStatement lps = partnerLookupConn.prepareStatement(lookupSql)) {
-                lps.setString(1, partnerId);
-                try (ResultSet lrs = lps.executeQuery()) {
-                    if (lrs.next()) {
-                        partnerEmailForMail = lrs.getString("email");
-                        partnerNameForMail = lrs.getString("partner_name");
-                    }
-                }
-            }
-        } catch (SQLException e) {
-            System.err.println("[Critical] Could not pre-fetch partner details: " + e.getMessage());
-        }
 
         try {
             conn = dbConfig.getCustomerDataSource().getConnection();
@@ -233,8 +216,6 @@ public class BookingHandler implements HttpHandler {
             }
 
             conn.commit();
-
-            // Notify Customer & Partner (Async Thread logic omitted for brevity, same as provided)
             sendResponse(exchange, 200, json("message", "Success", "booking_id", bookingId));
 
         } catch (Exception e) {
@@ -281,7 +262,7 @@ public class BookingHandler implements HttpHandler {
 
     private void handleCouponUsage(Connection conn, String uId, String code) throws SQLException {
         String cId = null;
-        try (PreparedStatement ps = conn.prepareStatement("SELECT coupon_id FROM coupons WHERE coupon_code=?")) {
+        try (PreparedStatement ps = conn.prepareStatement("SELECT coupon_id FROM coupons WHERE UPPER(coupon_code)=UPPER(?)")) {
             ps.setString(1, code);
             ResultSet rs = ps.executeQuery();
             if (rs.next()) cId = rs.getString("coupon_id");
