@@ -53,16 +53,25 @@ public class PaymentHandler implements HttpHandler {
         Map<String, Object> req = readJson(ex);
         try {
             RazorpayClient client = new RazorpayClient(RZP_KEY, RZP_SECRET);
+            
+            int amountInPaise = toInt(req.get("amount")); 
+            
             JSONObject orderReq = new JSONObject();
-            orderReq.put("amount", req.get("amount")); 
+            orderReq.put("amount", amountInPaise); 
             orderReq.put("currency", "INR");
             orderReq.put("payment_capture", 1);
+            
+            // Generate a temporary Payment Record ID to track the intent
+            String tempPrid = UUID.randomUUID().toString();
 
             Order order = client.orders.create(orderReq);
+            
             JSONObject res = new JSONObject();
             res.put("order_id", order.get("id").toString());
             res.put("razorpay_key_id", RZP_KEY);
             res.put("amount", order.get("amount").toString());
+            res.put("payment_record_id", tempPrid); // Key matched with Flutter code
+            
             respond(ex, 200, res.toString());
         } catch (Exception e) {
             respond(ex, 500, json("error", e.getMessage()));
@@ -79,9 +88,10 @@ public class PaymentHandler implements HttpHandler {
         String orderId = str(p.get("gateway_order_id"));
         String paymentId = str(p.get("gateway_payment_id"));
         String signature = str(p.get("gateway_signature"));
+        String existingPrid = str(p.get("payment_record_id"));
         double amount = toDouble(p.get("final_payable_amount"));
 
-        processPaymentUpdate(ex, bookingId, userId, partnerId, hotelId, orderId, paymentId, signature, amount, false);
+        processPaymentUpdate(ex, bookingId, userId, partnerId, hotelId, orderId, paymentId, signature, amount, existingPrid, false);
     }
 
     private void handleWebhook(HttpExchange ex) throws IOException {
@@ -98,6 +108,8 @@ public class PaymentHandler implements HttpHandler {
                 String paymentId = payment.getString("id");
                 double amount = payment.getDouble("amount") / 100.0;
                 
+                // Webhook usually doesn't have booking_id in root, 
+                // you'd typically look up the booking via order_id in a real scenario.
                 respond(ex, 200, "Webhook Processed");
             } else {
                 respond(ex, 401, "Invalid Webhook Signature");
@@ -108,7 +120,7 @@ public class PaymentHandler implements HttpHandler {
     }
 
     private void processPaymentUpdate(HttpExchange ex, String bid, String uid, String pid, String hid, 
-                                     String oid, String payid, String sig, double amt, boolean isWebhook) throws IOException {
+                                     String oid, String payid, String sig, double amt, String prid, boolean isWebhook) throws IOException {
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
             conn.setAutoCommit(false);
             
@@ -125,16 +137,16 @@ public class PaymentHandler implements HttpHandler {
                 failureReason = e.getMessage();
             }
 
-            String prid = UUID.randomUUID().toString();
+            // Use existing PRID if available, else generate new
+            String finalPrid = (prid == null || prid.isEmpty()) ? UUID.randomUUID().toString() : prid;
             int attemptNo = nextAttempt(conn, bid);
             
-            insertPaymentRecord(conn, prid, bid, uid, pid, hid, oid, payid, sig, status, failureReason, amt, attemptNo);
-            updateBookingStatus(conn, bid, status, payid, prid);
+            insertPaymentRecord(conn, finalPrid, bid, uid, pid, hid, oid, payid, sig, status, failureReason, amt, attemptNo);
+            updateBookingStatus(conn, bid, status, payid, finalPrid);
 
             conn.commit();
             
-            // FIXED: Using the overloaded json method with 4 arguments
-            if(!isWebhook) respond(ex, 200, json("status", status, "record_id", prid));
+            if(!isWebhook) respond(ex, 200, json("status", status, "record_id", finalPrid));
             
         } catch (Exception e) {
             if(!isWebhook) respond(ex, 500, json("error", e.getMessage()));
@@ -172,13 +184,14 @@ public class PaymentHandler implements HttpHandler {
     }
 
     private void updateBookingStatus(Connection conn, String bid, String status, String payId, String prid) throws SQLException {
+        // Correcting the enum cast for booking_status to match your schema requirements
         String sql = "UPDATE bookings_info SET payment_status = ?, transaction_id = ?, " +
-                     "last_payment_record_id = ?, payment_confirmed_at = NOW(), booking_status = ? WHERE booking_id = ?";
+                     "last_payment_record_id = ?, booking_status = ?::booking_status_enum WHERE booking_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, status);
+            ps.setString(1, status.toUpperCase()); // Matches PAID or FAILED
             ps.setString(2, payId);
             ps.setString(3, prid);
-            ps.setString(4, status.equals("Paid") ? "CONFIRMED" : "PENDING");
+            ps.setString(4, status.equalsIgnoreCase("Paid") ? "CONFIRMED" : "PENDING");
             ps.setString(5, bid);
             ps.executeUpdate();
         }
@@ -202,7 +215,7 @@ public class PaymentHandler implements HttpHandler {
         byte[] b = body.getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().set("Content-Type", "application/json");
         ex.sendResponseHeaders(code, b.length);
-        ex.getResponseBody().write(b);
+        try (OutputStream os = ex.getResponseBody()) { os.write(b); }
         ex.close();
     }
 
@@ -215,6 +228,11 @@ public class PaymentHandler implements HttpHandler {
     private double toDouble(Object o) {
         if (o == null) return 0.0;
         try { return Double.parseDouble(o.toString().replace(",", "")); } catch (Exception e) { return 0.0; }
+    }
+
+    private int toInt(Object o) {
+        if (o == null) return 0;
+        try { return (int) Double.parseDouble(o.toString()); } catch (Exception e) { return 0; }
     }
 
     private String json(String k, String v) { 

@@ -87,8 +87,7 @@ public class HotelBookingServer {
         server.createContext("/referrals", new RewardsWalletHandler(dbConfig));
         server.createContext("/payment/createOrder", new PaymentHandler(dbConfig));
         server.createContext("/payment/verify", new PaymentHandler(dbConfig));
-        server.createContext("/razorpay/webhook", new PaymentHandler(dbConfig));
-        server.createContext("/payment/refund", new PaymentHandler(dbConfig));
+        server.createContext("/payment/webhook", new PaymentHandler(dbConfig));
 
         // ========== WEB ==========
         server.createContext("/weblogin", new WebLoginRegisterHandler(dbConfig));
