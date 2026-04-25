@@ -39,7 +39,7 @@ public class BookingHandler implements HttpHandler {
                 case "/booking" -> handleBooking(exchange);
                 case "/getWalletBalance" -> handleGetWalletBalance(exchange);
                 case "/validateCoupon" -> handleValidateCoupon(exchange);
-                case "/rollbackWallet" -> handleRollbackWallet(exchange); // For refund on gateway failure
+                case "/rollbackWallet" -> handleRollbackWallet(exchange);
                 default -> sendResponse(exchange, 404, json("error", "Endpoint not found"));
             }
         } catch (Exception e) {
@@ -74,8 +74,20 @@ public class BookingHandler implements HttpHandler {
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     String couponId = rs.getString("coupon_id");
+                    int limitPerUser = rs.getInt("usage_limit_per_user");
+
+                    // 1. Check current usage count for this user
+                    PreparedStatement psUsage = conn.prepareStatement("SELECT usage_count FROM coupon_usage WHERE coupon_id = ? AND user_id = ?");
+                    psUsage.setString(1, couponId);
+                    psUsage.setString(2, userId);
+                    try (ResultSet rsUsage = psUsage.executeQuery()) {
+                        if (rsUsage.next() && rsUsage.getInt("usage_count") >= limitPerUser) {
+                            sendResponse(exchange, 400, json("error", "Usage limit exceeded for this coupon"));
+                            return;
+                        }
+                    }
                     
-                    // Check Rules dynamically from coupon_rules table
+                    // 2. Check Rule: First Booking Only
                     PreparedStatement psRule = conn.prepareStatement("SELECT rule_value FROM coupon_rules WHERE coupon_id = ? AND rule_type = 'first_booking_only'");
                     psRule.setString(1, couponId);
                     try (ResultSet rsRule = psRule.executeQuery()) {
@@ -84,7 +96,7 @@ public class BookingHandler implements HttpHandler {
                             psCheck.setString(1, userId);
                             try (ResultSet rsCheck = psCheck.executeQuery()) {
                                 if (rsCheck.next() && rsCheck.getInt(1) > 0) {
-                                    sendResponse(exchange, 400, json("error", "Coupon valid for first booking only"));
+                                    sendResponse(exchange, 400, json("error", "Valid for first booking only"));
                                     return;
                                 }
                             }
@@ -99,7 +111,7 @@ public class BookingHandler implements HttpHandler {
                     coupon.put("min_order_value", rs.getDouble("min_order_value"));
                     sendResponse(exchange, 200, objectMapper.writeValueAsString(coupon));
                 } else {
-                    sendResponse(exchange, 404, json("error", "Invalid coupon"));
+                    sendResponse(exchange, 404, json("error", "Invalid or inactive coupon"));
                 }
             }
         } catch (SQLException e) {
@@ -119,17 +131,14 @@ public class BookingHandler implements HttpHandler {
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
             conn.setAutoCommit(false);
             try {
-                // 1. Process Wallet (Deduct + Txn Record)
                 if (walletRequested > 0) {
                     handleWalletUsage(conn, userId, bookingId, walletRequested);
                 }
 
-                // 2. Process Coupon (Usage Record)
                 if (!couponCode.isEmpty()) {
                     handleCouponUsage(conn, userId, couponCode);
                 }
 
-                // 3. Save Booking
                 String sql = "INSERT INTO bookings_info (partner_id, hotel_id, booking_id, hotel_name, guest_name, email, user_id, " +
                              "total_price, final_payable_amount, wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount, " +
                              "payment_status, booking_status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())";
@@ -157,43 +166,10 @@ public class BookingHandler implements HttpHandler {
                 sendResponse(exchange, 200, json("message", "Success", "booking_id", bookingId));
             } catch (Exception e) {
                 conn.rollback();
-                throw e;
+                sendResponse(exchange, 500, json("error", e.getMessage()));
             }
         } catch (Exception e) {
             sendResponse(exchange, 500, json("error", e.getMessage()));
-        }
-    }
-
-    private void handleRollbackWallet(HttpExchange exchange) throws IOException {
-        String body = new BufferedReader(new InputStreamReader(exchange.getRequestBody())).lines().collect(Collectors.joining("\n"));
-        Map<String, Object> data = objectMapper.readValue(body, Map.class);
-        String userId = str(data.get("user_id"));
-        double amount = toDouble(data.get("amount"));
-        String refId = str(data.get("booking_id"));
-
-        try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
-            conn.setAutoCommit(false);
-            
-            // Refund Wallet
-            PreparedStatement psUpd = conn.prepareStatement("UPDATE wallets SET balance = balance + ? WHERE user_id = ?");
-            psUpd.setDouble(1, amount);
-            psUpd.setString(2, userId);
-            psUpd.executeUpdate();
-
-            // Log Credit Transaction
-            PreparedStatement psTxn = conn.prepareStatement("INSERT INTO wallet_transactions (txn_id, wallet_id, type, amount, direction, reference_id, status, description, created_at) " +
-                    "SELECT ?, wallet_id, 'REFUND', ?, 'CREDIT', ?, 'SUCCESS', ?, NOW() FROM wallets WHERE user_id = ?");
-            psTxn.setString(1, "REF" + System.currentTimeMillis());
-            psTxn.setDouble(2, amount);
-            psTxn.setString(3, refId);
-            psTxn.setString(4, "Gateway Failure Refund for " + refId);
-            psTxn.setString(5, userId);
-            psTxn.executeUpdate();
-
-            conn.commit();
-            sendResponse(exchange, 200, json("message", "Rollback Successful"));
-        } catch (Exception e) {
-            sendResponse(exchange, 500, json("error", "Rollback Failed: " + e.getMessage()));
         }
     }
 
@@ -210,14 +186,12 @@ public class BookingHandler implements HttpHandler {
         }
         if (wId == null || balance < req) throw new SQLException("Insufficient wallet balance");
 
-        // Update Wallet
         try (PreparedStatement ps = conn.prepareStatement("UPDATE wallets SET balance = balance - ? WHERE wallet_id = ?")) {
             ps.setDouble(1, req);
             ps.setString(2, wId);
             ps.executeUpdate();
         }
 
-        // Log Debit Transaction
         try (PreparedStatement ps = conn.prepareStatement("INSERT INTO wallet_transactions (txn_id, wallet_id, type, amount, direction, reference_id, status, description, balance_after_txn, created_at) VALUES (?,?,?,?,?,?,?,?,?, NOW())")) {
             ps.setString(1, "WLT" + System.currentTimeMillis());
             ps.setString(2, wId);
@@ -226,7 +200,7 @@ public class BookingHandler implements HttpHandler {
             ps.setString(5, "DEBIT");
             ps.setString(6, bId);
             ps.setString(7, "SUCCESS");
-            ps.setString(8, "Booking " + bId);
+            ps.setString(8, "Stay Booking " + bId);
             ps.setDouble(9, balance - req);
             ps.executeUpdate();
         }
@@ -241,14 +215,53 @@ public class BookingHandler implements HttpHandler {
         }
         if (cId == null) return;
 
-        String sql = "INSERT INTO coupon_usage (usage_id, coupon_id, user_id, usage_count, last_used_at) " +
-                     "VALUES (?,?,?,1, NOW()) ON CONFLICT (coupon_id, user_id) " +
-                     "DO UPDATE SET usage_count = coupon_usage.usage_count + 1, last_used_at = NOW()";
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, UUID.randomUUID().toString());
-            ps.setString(2, cId);
-            ps.setString(3, uId);
-            ps.executeUpdate();
+        // FIXED: Replaced ON CONFLICT with Manual Upsert logic to support non-unique constraints
+        PreparedStatement checkPs = conn.prepareStatement("SELECT usage_id FROM coupon_usage WHERE coupon_id = ? AND user_id = ?");
+        checkPs.setString(1, cId);
+        checkPs.setString(2, uId);
+        ResultSet rsCheck = checkPs.executeQuery();
+
+        if (rsCheck.next()) {
+            PreparedStatement updatePs = conn.prepareStatement("UPDATE coupon_usage SET usage_count = usage_count + 1, last_used_at = NOW() WHERE coupon_id = ? AND user_id = ?");
+            updatePs.setString(1, cId);
+            updatePs.setString(2, uId);
+            updatePs.executeUpdate();
+        } else {
+            PreparedStatement insertPs = conn.prepareStatement("INSERT INTO coupon_usage (usage_id, coupon_id, user_id, usage_count, last_used_at) VALUES (?,?,?,1, NOW())");
+            insertPs.setString(1, UUID.randomUUID().toString());
+            insertPs.setString(2, cId);
+            insertPs.setString(3, uId);
+            insertPs.executeUpdate();
+        }
+    }
+
+    private void handleRollbackWallet(HttpExchange exchange) throws IOException {
+        String body = new BufferedReader(new InputStreamReader(exchange.getRequestBody())).lines().collect(Collectors.joining("\n"));
+        Map<String, Object> data = objectMapper.readValue(body, Map.class);
+        String userId = str(data.get("user_id"));
+        double amount = toDouble(data.get("amount"));
+        String bId = str(data.get("booking_id"));
+
+        try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
+            conn.setAutoCommit(false);
+            PreparedStatement psUpd = conn.prepareStatement("UPDATE wallets SET balance = balance + ? WHERE user_id = ?");
+            psUpd.setDouble(1, amount);
+            psUpd.setString(2, userId);
+            psUpd.executeUpdate();
+
+            PreparedStatement psTxn = conn.prepareStatement("INSERT INTO wallet_transactions (txn_id, wallet_id, type, amount, direction, reference_id, status, description, created_at) " +
+                    "SELECT ?, wallet_id, 'REFUND', ?, 'CREDIT', ?, 'SUCCESS', ?, NOW() FROM wallets WHERE user_id = ?");
+            psTxn.setString(1, "REF" + System.currentTimeMillis());
+            psTxn.setDouble(2, amount);
+            psTxn.setString(3, bId);
+            psTxn.setString(4, "Gateway Failure Refund for " + bId);
+            psTxn.setString(5, userId);
+            psTxn.executeUpdate();
+
+            conn.commit();
+            sendResponse(exchange, 200, json("message", "Rollback Successful"));
+        } catch (Exception e) {
+            sendResponse(exchange, 500, json("error", e.getMessage()));
         }
     }
 
