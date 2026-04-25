@@ -1,7 +1,6 @@
 package com.hotel.app;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.hotel.notification.service.EmailService;
 import com.hotel.utilities.DbConfig;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -36,16 +35,12 @@ public class BookingHandler implements HttpHandler {
 
         String path = exchange.getRequestURI().getPath();
         try {
-            if (path.equals("/booking") && exchange.getRequestMethod().equalsIgnoreCase("POST")) {
-                handleBooking(exchange);
-            } else if (path.equals("/updatePayment") && exchange.getRequestMethod().equalsIgnoreCase("POST")) {
-                handleUpdatePayment(exchange);
-            } else if (path.equals("/getWalletBalance") && exchange.getRequestMethod().equalsIgnoreCase("GET")) {
-                handleGetWalletBalance(exchange);
-            } else if (path.equals("/validateCoupon") && exchange.getRequestMethod().equalsIgnoreCase("GET")) {
-                handleValidateCoupon(exchange);
-            } else {
-                sendResponse(exchange, 404, json("error", "Invalid endpoint: " + path));
+            switch (path) {
+                case "/booking" -> handleBooking(exchange);
+                case "/getWalletBalance" -> handleGetWalletBalance(exchange);
+                case "/validateCoupon" -> handleValidateCoupon(exchange);
+                case "/rollbackWallet" -> handleRollbackWallet(exchange); // For refund on gateway failure
+                default -> sendResponse(exchange, 404, json("error", "Endpoint not found"));
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -56,21 +51,12 @@ public class BookingHandler implements HttpHandler {
     private void handleGetWalletBalance(HttpExchange exchange) throws IOException {
         Map<String, String> params = queryToMap(exchange.getRequestURI().getQuery());
         String userId = params.get("user_id");
-
-        if (userId == null || userId.isEmpty()) {
-            sendResponse(exchange, 400, json("error", "User ID is required"));
-            return;
-        }
-
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
              PreparedStatement ps = conn.prepareStatement("SELECT balance FROM wallets WHERE user_id = ?")) {
             ps.setString(1, userId);
             try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    sendResponse(exchange, 200, "{\"balance\":" + rs.getDouble("balance") + "}");
-                } else {
-                    sendResponse(exchange, 200, "{\"balance\": 0.0}");
-                }
+                double balance = rs.next() ? rs.getDouble("balance") : 0.0;
+                sendResponse(exchange, 200, "{\"balance\":" + balance + "}");
             }
         } catch (SQLException e) {
             sendResponse(exchange, 500, json("error", e.getMessage()));
@@ -80,30 +66,40 @@ public class BookingHandler implements HttpHandler {
     private void handleValidateCoupon(HttpExchange exchange) throws IOException {
         Map<String, String> params = queryToMap(exchange.getRequestURI().getQuery());
         String code = params.get("code");
+        String userId = params.get("user_id");
 
-        if (code == null || code.isEmpty()) {
-            sendResponse(exchange, 400, json("error", "Coupon code is required"));
-            return;
-        }
-
-        // UPDATED: Added UPPER() to handle case-insensitive matching at the DB level
-        try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
-             PreparedStatement ps = conn.prepareStatement("SELECT * FROM coupons WHERE UPPER(coupon_code) = UPPER(?) AND status = 'active'")) {
+        try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
+            PreparedStatement ps = conn.prepareStatement("SELECT * FROM coupons WHERE UPPER(coupon_code) = UPPER(?) AND status = 'active'");
             ps.setString(1, code);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
+                    String couponId = rs.getString("coupon_id");
+                    
+                    // Check Rules dynamically from coupon_rules table
+                    PreparedStatement psRule = conn.prepareStatement("SELECT rule_value FROM coupon_rules WHERE coupon_id = ? AND rule_type = 'first_booking_only'");
+                    psRule.setString(1, couponId);
+                    try (ResultSet rsRule = psRule.executeQuery()) {
+                        if (rsRule.next() && "true".equalsIgnoreCase(rsRule.getString("rule_value"))) {
+                            PreparedStatement psCheck = conn.prepareStatement("SELECT COUNT(*) FROM bookings_info WHERE user_id = ? AND booking_status = 'CONFIRMED'");
+                            psCheck.setString(1, userId);
+                            try (ResultSet rsCheck = psCheck.executeQuery()) {
+                                if (rsCheck.next() && rsCheck.getInt(1) > 0) {
+                                    sendResponse(exchange, 400, json("error", "Coupon valid for first booking only"));
+                                    return;
+                                }
+                            }
+                        }
+                    }
+
                     Map<String, Object> coupon = new HashMap<>();
-                    coupon.put("coupon_id", rs.getString("coupon_id"));
-                    coupon.put("coupon_code", rs.getString("coupon_code"));
+                    coupon.put("coupon_id", couponId);
                     coupon.put("discount_type", rs.getString("discount_type"));
                     coupon.put("discount_value", rs.getDouble("discount_value"));
                     coupon.put("max_discount", rs.getDouble("max_discount"));
                     coupon.put("min_order_value", rs.getDouble("min_order_value"));
-                    coupon.put("valid_to", rs.getTimestamp("valid_to").toString());
-                    
                     sendResponse(exchange, 200, objectMapper.writeValueAsString(coupon));
                 } else {
-                    sendResponse(exchange, 404, json("error", "Invalid or inactive coupon"));
+                    sendResponse(exchange, 404, json("error", "Invalid coupon"));
                 }
             }
         } catch (SQLException e) {
@@ -112,122 +108,96 @@ public class BookingHandler implements HttpHandler {
     }
 
     private void handleBooking(HttpExchange exchange) throws IOException {
-        String body = new BufferedReader(new InputStreamReader(exchange.getRequestBody()))
-                .lines().collect(Collectors.joining("\n"));
+        String body = new BufferedReader(new InputStreamReader(exchange.getRequestBody())).lines().collect(Collectors.joining("\n"));
+        Map<String, Object> data = objectMapper.readValue(body, Map.class);
 
-        Map<String, Object> data;
-        try {
-            data = objectMapper.readValue(body, Map.class);
-        } catch (Exception e) {
-            sendResponse(exchange, 400, json("error", "Invalid JSON payload"));
-            return;
-        }
-
-        boolean isPgMode = data.containsKey("selected_room_type") || data.containsKey("monthly_price");
         String bookingId = generateBookingId();
         String userId = str(data.get("user_id"));
-        String partnerId = str(data.get("partner_id"));
-
-        double originalAmount = toDouble(data.getOrDefault("total_price", data.get("original_total_price")));
-        double finalAmount = toDouble(data.get("final_payable_amount"));
-        double amountPaidOnline = toDouble(data.get("amount_paid_online"));
-        double dueAtHotel = toDouble(data.get("due_amount_at_hotel"));
-
-        String paymentStatus = normalizePaymentStatus(str(data.get("payment_status")));
-        String bookingStatus = str(data.getOrDefault("booking_status", "PENDING")).toUpperCase();
-
         double walletRequested = toDouble(data.get("wallet_amount_deducted"));
-        boolean walletUsedFlag = "Yes".equalsIgnoreCase(str(data.get("wallet_used")));
-
         String couponCode = str(data.get("coupon_code"));
-        double couponDiscount = toDouble(data.get("coupon_discount_amount"));
 
-        double actualWalletDebited = 0;
-        Connection conn = null;
-
-        try {
-            conn = dbConfig.getCustomerDataSource().getConnection();
+        try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
             conn.setAutoCommit(false);
-
-            if (!"Offline".equalsIgnoreCase(str(data.get("payment_method_type")))) {
-                if (walletUsedFlag && walletRequested > 0 && !userId.isBlank()) {
-                    actualWalletDebited = handleWalletUsage(conn, userId, bookingId, walletRequested, originalAmount);
+            try {
+                // 1. Process Wallet (Deduct + Txn Record)
+                if (walletRequested > 0) {
+                    handleWalletUsage(conn, userId, bookingId, walletRequested);
                 }
+
+                // 2. Process Coupon (Usage Record)
                 if (!couponCode.isEmpty()) {
                     handleCouponUsage(conn, userId, couponCode);
                 }
+
+                // 3. Save Booking
+                String sql = "INSERT INTO bookings_info (partner_id, hotel_id, booking_id, hotel_name, guest_name, email, user_id, " +
+                             "total_price, final_payable_amount, wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount, " +
+                             "payment_status, booking_status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())";
+                
+                try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                    ps.setString(1, str(data.get("partner_id")));
+                    ps.setString(2, str(data.get("hotel_id")));
+                    ps.setString(3, bookingId);
+                    ps.setString(4, str(data.get("hotel_name")));
+                    ps.setString(5, str(data.get("guest_name")));
+                    ps.setString(6, str(data.get("email")));
+                    ps.setString(7, userId);
+                    ps.setDouble(8, toDouble(data.get("total_price")));
+                    ps.setDouble(9, toDouble(data.get("final_payable_amount")));
+                    ps.setString(10, str(data.get("wallet_used")));
+                    ps.setDouble(11, walletRequested);
+                    ps.setString(12, couponCode);
+                    ps.setDouble(13, toDouble(data.get("coupon_discount_amount")));
+                    ps.setString(14, str(data.get("payment_status")));
+                    ps.setString(15, str(data.get("booking_status")));
+                    ps.executeUpdate();
+                }
+
+                conn.commit();
+                sendResponse(exchange, 200, json("message", "Success", "booking_id", bookingId));
+            } catch (Exception e) {
+                conn.rollback();
+                throw e;
             }
-
-            String sql = """
-                INSERT INTO bookings_info (
-                    partner_id, hotel_id, booking_id, hotel_name, hotel_type, guest_name, email, user_id,
-                    check_in_date, check_out_date, guest_count, adults, children, total_rooms_booked,
-                    total_days_at_stay, room_price_per_day, all_days_price, gst,
-                    original_amount, final_payable_amount, amount_paid_online, due_amount_at_hotel,
-                    payment_method_type, paid_via, payment_status, transaction_id,
-                    wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount,
-                    room_type, room_price_per_month, months, hotel_address, hotel_contact, 
-                    booking_status, last_payment_record_id
-                )
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                        ?::yes_no_enum, ?, ?, ?, ?, ?, ?, ?, ?, ?::booking_status_enum, ?)
-                """;
-
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, partnerId);
-                ps.setString(2, str(data.get("hotel_id")));
-                ps.setString(3, bookingId);
-                ps.setString(4, str(data.get("hotel_name")));
-                ps.setString(5, isPgMode ? "PG" : str(data.get("hotel_type")));
-                ps.setString(6, str(data.get("guest_name")));
-                ps.setString(7, str(data.get("email")));
-                ps.setString(8, userId);
-                ps.setDate(9, parseSqlDate(data.get("check_in_date")));
-                ps.setDate(10, parseSqlDate(data.get("check_out_date")));
-                ps.setInt(11, toInt(data.getOrDefault("guest_count", data.get("Persons"))));
-                ps.setInt(12, toInt(data.getOrDefault("adults", data.get("Persons"))));
-                ps.setInt(13, toInt(data.getOrDefault("children", 0)));
-                ps.setInt(14, toInt(data.getOrDefault("total_rooms_booked", 1)));
-                ps.setInt(15, toInt(data.getOrDefault("total_days_at_stay", data.get("months"))));
-                ps.setDouble(16, toDouble(data.getOrDefault("room_price_per_day", 0)));
-                ps.setDouble(17, toDouble(data.getOrDefault("all_days_price", data.get("All_months_Price"))));
-                ps.setDouble(18, toDouble(data.get("gst")));
-                ps.setDouble(19, originalAmount);
-                ps.setDouble(20, finalAmount);
-                ps.setDouble(21, amountPaidOnline);
-                ps.setDouble(22, dueAtHotel);
-                ps.setString(23, str(data.get("payment_method_type")));
-                ps.setString(24, str(data.get("paid_via")));
-                ps.setString(25, paymentStatus);
-                ps.setString(26, str(data.get("transaction_id")));
-                ps.setString(27, actualWalletDebited > 0 ? "Yes" : "No");
-                ps.setDouble(28, actualWalletDebited);
-                ps.setString(29, couponCode);
-                ps.setDouble(30, couponDiscount);
-                ps.setString(31, str(data.getOrDefault("room_type", data.get("selected_room_type"))));
-                ps.setString(32, str(data.getOrDefault("room_price_per_month", data.get("Selected_Room_Price"))));
-                ps.setInt(33, toInt(data.getOrDefault("months", 1)));
-                ps.setString(34, str(data.get("hotel_address")));
-                ps.setString(35, str(data.get("hotel_contact")));
-                ps.setString(36, bookingStatus); 
-                ps.setString(37, str(data.get("last_payment_record_id")));
-
-                ps.executeUpdate();
-            }
-
-            conn.commit();
-            sendResponse(exchange, 200, json("message", "Success", "booking_id", bookingId));
-
         } catch (Exception e) {
-            if (conn != null) try { conn.rollback(); } catch (SQLException ignored) {}
-            e.printStackTrace();
             sendResponse(exchange, 500, json("error", e.getMessage()));
-        } finally {
-            if (conn != null) try { conn.close(); } catch (SQLException ignored) {}
         }
     }
 
-    private double handleWalletUsage(Connection conn, String userId, String bId, double req, double total) throws SQLException {
+    private void handleRollbackWallet(HttpExchange exchange) throws IOException {
+        String body = new BufferedReader(new InputStreamReader(exchange.getRequestBody())).lines().collect(Collectors.joining("\n"));
+        Map<String, Object> data = objectMapper.readValue(body, Map.class);
+        String userId = str(data.get("user_id"));
+        double amount = toDouble(data.get("amount"));
+        String refId = str(data.get("booking_id"));
+
+        try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
+            conn.setAutoCommit(false);
+            
+            // Refund Wallet
+            PreparedStatement psUpd = conn.prepareStatement("UPDATE wallets SET balance = balance + ? WHERE user_id = ?");
+            psUpd.setDouble(1, amount);
+            psUpd.setString(2, userId);
+            psUpd.executeUpdate();
+
+            // Log Credit Transaction
+            PreparedStatement psTxn = conn.prepareStatement("INSERT INTO wallet_transactions (txn_id, wallet_id, type, amount, direction, reference_id, status, description, created_at) " +
+                    "SELECT ?, wallet_id, 'REFUND', ?, 'CREDIT', ?, 'SUCCESS', ?, NOW() FROM wallets WHERE user_id = ?");
+            psTxn.setString(1, "REF" + System.currentTimeMillis());
+            psTxn.setDouble(2, amount);
+            psTxn.setString(3, refId);
+            psTxn.setString(4, "Gateway Failure Refund for " + refId);
+            psTxn.setString(5, userId);
+            psTxn.executeUpdate();
+
+            conn.commit();
+            sendResponse(exchange, 200, json("message", "Rollback Successful"));
+        } catch (Exception e) {
+            sendResponse(exchange, 500, json("error", "Rollback Failed: " + e.getMessage()));
+        }
+    }
+
+    private void handleWalletUsage(Connection conn, String userId, String bId, double req) throws SQLException {
         double balance = 0;
         String wId = null;
         try (PreparedStatement ps = conn.prepareStatement("SELECT wallet_id, balance FROM wallets WHERE user_id=? FOR UPDATE")) {
@@ -238,14 +208,17 @@ public class BookingHandler implements HttpHandler {
                 balance = rs.getDouble("balance");
             }
         }
-        if (wId == null || balance < req) return 0;
-        
+        if (wId == null || balance < req) throw new SQLException("Insufficient wallet balance");
+
+        // Update Wallet
         try (PreparedStatement ps = conn.prepareStatement("UPDATE wallets SET balance = balance - ? WHERE wallet_id = ?")) {
             ps.setDouble(1, req);
             ps.setString(2, wId);
             ps.executeUpdate();
         }
-        try (PreparedStatement ps = conn.prepareStatement("INSERT INTO wallet_transactions (txn_id, wallet_id, type, amount, direction, reference_id, status, description, balance_after_txn) VALUES (?,?,?,?,?,?,?,?,?)")) {
+
+        // Log Debit Transaction
+        try (PreparedStatement ps = conn.prepareStatement("INSERT INTO wallet_transactions (txn_id, wallet_id, type, amount, direction, reference_id, status, description, balance_after_txn, created_at) VALUES (?,?,?,?,?,?,?,?,?, NOW())")) {
             ps.setString(1, "WLT" + System.currentTimeMillis());
             ps.setString(2, wId);
             ps.setString(3, "BOOKING_PAYMENT");
@@ -253,11 +226,10 @@ public class BookingHandler implements HttpHandler {
             ps.setString(5, "DEBIT");
             ps.setString(6, bId);
             ps.setString(7, "SUCCESS");
-            ps.setString(8, "Booking Payment " + bId);
+            ps.setString(8, "Booking " + bId);
             ps.setDouble(9, balance - req);
             ps.executeUpdate();
         }
-        return req;
     }
 
     private void handleCouponUsage(Connection conn, String uId, String code) throws SQLException {
@@ -268,13 +240,10 @@ public class BookingHandler implements HttpHandler {
             if (rs.next()) cId = rs.getString("coupon_id");
         }
         if (cId == null) return;
-        
-        String sql = """
-            INSERT INTO coupon_usage (usage_id, coupon_id, user_id, usage_count, last_used_at) 
-            VALUES (?,?,?,1, NOW()) 
-            ON CONFLICT (coupon_id, user_id) 
-            DO UPDATE SET usage_count = coupon_usage.usage_count + 1, last_used_at = EXCLUDED.last_used_at
-            """;
+
+        String sql = "INSERT INTO coupon_usage (usage_id, coupon_id, user_id, usage_count, last_used_at) " +
+                     "VALUES (?,?,?,1, NOW()) ON CONFLICT (coupon_id, user_id) " +
+                     "DO UPDATE SET usage_count = coupon_usage.usage_count + 1, last_used_at = NOW()";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, UUID.randomUUID().toString());
             ps.setString(2, cId);
@@ -283,23 +252,9 @@ public class BookingHandler implements HttpHandler {
         }
     }
 
-    private void handleUpdatePayment(HttpExchange exchange) throws IOException {
-        String body = new BufferedReader(new InputStreamReader(exchange.getRequestBody())).lines().collect(Collectors.joining("\n"));
-        Map<String, Object> payload = objectMapper.readValue(body, Map.class);
-        String bId = str(payload.get("booking_id"));
-        String status = normalizePaymentStatus(str(payload.get("payment_status")));
-        
-        try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
-             PreparedStatement ps = conn.prepareStatement("UPDATE bookings_info SET payment_status=?, booking_status='CONFIRMED' WHERE booking_id=?")) {
-            ps.setString(1, status);
-            ps.setString(2, bId);
-            ps.executeUpdate();
-            sendResponse(exchange, 200, json("message", "Updated"));
-        } catch (SQLException e) {
-            sendResponse(exchange, 500, json("error", e.getMessage()));
-        }
-    }
-
+    private String generateBookingId() { return "BKG" + (100000 + new Random().nextInt(900000)); }
+    private double toDouble(Object o) { if (o == null) return 0; try { return Double.parseDouble(o.toString()); } catch (Exception e) { return 0; } }
+    private String str(Object o) { return o == null ? "" : o.toString().trim(); }
     private Map<String, String> queryToMap(String query) {
         Map<String, String> result = new HashMap<>();
         if (query == null) return result;
@@ -308,28 +263,6 @@ public class BookingHandler implements HttpHandler {
             if (entry.length > 1) result.put(entry[0], entry[1]);
         }
         return result;
-    }
-
-    private String generateBookingId() { return "BKG" + (100000 + new Random().nextInt(900000)); }
-    private double toDouble(Object o) { if (o == null) return 0; try { return Double.parseDouble(o.toString().replace(",", "")); } catch (Exception e) { return 0; } }
-    private int toInt(Object o) { if (o == null) return 0; try { return Integer.parseInt(o.toString()); } catch (Exception e) { return 0; } }
-    private String str(Object o) { return o == null ? "" : o.toString().trim(); }
-    private String normalizePaymentStatus(String s) {
-        if (s == null || s.isEmpty()) return "PENDING";
-        String val = s.toUpperCase();
-        return (val.contains("PAID") || val.contains("SUCCESS")) ? "PAID" : (val.contains("FAILED") ? "FAILED" : "PENDING");
-    }
-    private java.sql.Date parseSqlDate(Object val) {
-        if (val == null) return null;
-        String input = val.toString().trim().replace("/", "-").replace(".", "-");
-        try {
-            if (input.matches("\\d{4}-\\d{1,2}-\\d{1,2}")) return java.sql.Date.valueOf(input);
-            if (input.matches("\\d{1,2}-\\d{1,2}-\\d{4}")) {
-                String[] p = input.split("-");
-                return java.sql.Date.valueOf(p[2] + "-" + p[1] + "-" + p[0]);
-            }
-        } catch (Exception ignored) {}
-        return null;
     }
     private void sendResponse(HttpExchange ex, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
