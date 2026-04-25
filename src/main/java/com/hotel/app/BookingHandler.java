@@ -76,7 +76,6 @@ public class BookingHandler implements HttpHandler {
                     String couponId = rs.getString("coupon_id");
                     int limitPerUser = rs.getInt("usage_limit_per_user");
 
-                    // 1. Check current usage count for this user
                     PreparedStatement psUsage = conn.prepareStatement("SELECT usage_count FROM coupon_usage WHERE coupon_id = ? AND user_id = ?");
                     psUsage.setString(1, couponId);
                     psUsage.setString(2, userId);
@@ -87,7 +86,6 @@ public class BookingHandler implements HttpHandler {
                         }
                     }
                     
-                    // 2. Check Rule: First Booking Only
                     PreparedStatement psRule = conn.prepareStatement("SELECT rule_value FROM coupon_rules WHERE coupon_id = ? AND rule_type = 'first_booking_only'");
                     psRule.setString(1, couponId);
                     try (ResultSet rsRule = psRule.executeQuery()) {
@@ -139,8 +137,9 @@ public class BookingHandler implements HttpHandler {
                     handleCouponUsage(conn, userId, couponCode);
                 }
 
+                // UPDATED SQL: Aligned column names with your database schema
                 String sql = "INSERT INTO bookings_info (partner_id, hotel_id, booking_id, hotel_name, guest_name, email, user_id, " +
-                             "total_price, final_payable_amount, wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount, " +
+                             "original_amount, final_payable_amount, wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount, " +
                              "payment_status, booking_status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())";
                 
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -151,7 +150,7 @@ public class BookingHandler implements HttpHandler {
                     ps.setString(5, str(data.get("guest_name")));
                     ps.setString(6, str(data.get("email")));
                     ps.setString(7, userId);
-                    ps.setDouble(8, toDouble(data.get("total_price")));
+                    ps.setDouble(8, toDouble(data.get("total_price"))); // Maps to original_amount
                     ps.setDouble(9, toDouble(data.get("final_payable_amount")));
                     ps.setString(10, str(data.get("wallet_used")));
                     ps.setDouble(11, walletRequested);
@@ -215,7 +214,6 @@ public class BookingHandler implements HttpHandler {
         }
         if (cId == null) return;
 
-        // FIXED: Replaced ON CONFLICT with Manual Upsert logic to support non-unique constraints
         PreparedStatement checkPs = conn.prepareStatement("SELECT usage_id FROM coupon_usage WHERE coupon_id = ? AND user_id = ?");
         checkPs.setString(1, cId);
         checkPs.setString(2, uId);
