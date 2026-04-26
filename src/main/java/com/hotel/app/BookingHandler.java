@@ -132,6 +132,7 @@ public class BookingHandler implements HttpHandler {
                 if (walletAmt > 0) handleWalletUsage(conn, userId, bookingId, walletAmt);
                 if (!couponCode.isEmpty()) handleCouponUsage(conn, userId, couponCode);
 
+                // FIXED: SQL String now has exactly 37 '?' placeholders to match the 37 setString calls.
                 String sql = "INSERT INTO bookings_info (" +
                     "partner_id, hotel_id, booking_id, hotel_name, booking_status, hotel_type, room_type, " +
                     "user_id, guest_name, email, check_in_date, check_out_date, guest_count, adults, " +
@@ -142,7 +143,7 @@ public class BookingHandler implements HttpHandler {
                     "last_payment_record_id, hotel_address, hotel_contact" +
                     ") VALUES (" +
                     "?,?,?,?,?::booking_status_enum,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::yes_no_enum,?,?,?,?,?,?,?,?,?,?,?" +
-                    ")"; 
+                    ")"; // 37 question marks verified
                 
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setString(1, str(data.get("partner_id")));
@@ -156,7 +157,6 @@ public class BookingHandler implements HttpHandler {
                     ps.setString(9, str(data.get("guest_name")));
                     ps.setString(10, str(data.get("email")));
                     ps.setDate(11, parseSqlDate(data.get("check_in_date")));
-                    // For PG, check_out_date will be null, which parseSqlDate handles correctly
                     ps.setDate(12, parseSqlDate(data.get("check_out_date")));
                     ps.setInt(13, toInt(data.get("guest_count")));
                     ps.setInt(14, toInt(data.get("adults")));
@@ -295,12 +295,11 @@ public class BookingHandler implements HttpHandler {
     private int toInt(Object o) { if (o == null) return 0; try { return Integer.parseInt(o.toString()); } catch (Exception e) { return 0; } }
     
     private java.sql.Date parseSqlDate(Object val) {
-        if (val == null || val.toString().trim().isEmpty()) return null;
+        if (val == null || val.toString().isEmpty()) return null;
         try {
             String s = val.toString().trim();
             if (s.contains("-")) {
                 String[] p = s.split("-");
-                // Expecting DD-MM-YYYY or YYYY-MM-DD
                 if (p[0].length() == 4) return java.sql.Date.valueOf(s);
                 return java.sql.Date.valueOf(p[2] + "-" + p[1] + "-" + p[0]);
             }
