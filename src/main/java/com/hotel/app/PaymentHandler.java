@@ -61,7 +61,6 @@ public class PaymentHandler implements HttpHandler {
             orderReq.put("currency", "INR");
             orderReq.put("payment_capture", 1);
             
-            // This ID will be used to track the attempt in the Flutter frontend
             String tempPrid = UUID.randomUUID().toString();
 
             Order order = client.orders.create(orderReq);
@@ -114,14 +113,14 @@ public class PaymentHandler implements HttpHandler {
                                      String oid, String payid, String sig, double amt, String prid, boolean isWebhook) throws IOException {
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
             
-            // 1. IDEMPOTENCY CHECK
-            // If this payment ID already exists, the transaction is already complete.
+            // 1. IMPROVED IDEMPOTENCY CHECK
             if (payid != null && !payid.isEmpty()) {
                 try (PreparedStatement check = conn.prepareStatement("SELECT 1 FROM payment_transactions WHERE gateway_payment_id = ?")) {
                     check.setString(1, payid);
                     try (ResultSet rs = check.executeQuery()) {
                         if (rs.next()) {
-                            if (!isWebhook) respond(ex, 200, json("status", "PAID", "message", "Already Processed"));
+                            // If it exists, it means the processing is already done.
+                            if (!isWebhook) respond(ex, 200, json("status", "PAID", "message", "Transaction already synchronized."));
                             return;
                         }
                     }
@@ -140,17 +139,19 @@ public class PaymentHandler implements HttpHandler {
                 status = "PAID";
             } catch (RazorpayException e) {
                 status = "FAILED";
-                failureReason = e.getMessage();
+                failureReason = "Signature Mismatch: " + e.getMessage();
             }
 
-            // 3. DATABASE UPDATE BLOCK
+            // 3. ATOMIC DATABASE UPDATE
             conn.setAutoCommit(false);
             try {
-                // Use the ID provided by the frontend for consistency
                 String finalPrid = (prid == null || prid.trim().isEmpty()) ? UUID.randomUUID().toString() : prid;
                 int attemptNo = nextAttempt(conn, bid);
                 
+                // Insert transaction record first (Ledger)
                 insertPaymentRecord(conn, finalPrid, bid, uid, pid, hid, oid, payid, sig, status, failureReason, amt, attemptNo);
+                
+                // Update booking status second (Master Table)
                 updateBookingStatus(conn, bid, status, payid, finalPrid);
 
                 conn.commit();
@@ -159,12 +160,15 @@ public class PaymentHandler implements HttpHandler {
                 throw e;
             }
             
-            // 4. FINAL RESPONSE
-            if(!isWebhook) respond(ex, 200, json("status", status, "record_id", prid));
+            // 4. SEQUENTIAL SYNC RESPONSE
+            if(!isWebhook) {
+                // Ensure the status is sent back clearly so Flutter transitions to the next page
+                respond(ex, 200, json("status", status, "record_id", prid));
+            }
             
         } catch (Exception e) {
             e.printStackTrace();
-            if(!isWebhook) respond(ex, 500, json("error", "Payment verification internal failure"));
+            if(!isWebhook) respond(ex, 500, json("error", "Critical Sync Failure: " + e.getMessage()));
         }
     }
 
@@ -201,6 +205,7 @@ public class PaymentHandler implements HttpHandler {
     }
 
     private void updateBookingStatus(Connection conn, String bid, String status, String payId, String prid) throws SQLException {
+        // Enforce the use of the enum cast for Postgres
         String sql = "UPDATE bookings_info SET payment_status = ?, transaction_id = ?, " + 
                      "last_payment_record_id = ?, booking_status = ?::booking_status_enum, " +
                      "payment_confirmed_at = NOW() WHERE booking_id = ?";
@@ -225,8 +230,8 @@ public class PaymentHandler implements HttpHandler {
 
     private void addCors(HttpExchange ex) {
         ex.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
-        ex.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
-        ex.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
+        ex.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        ex.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
     }
 
     private void respond(HttpExchange ex, int code, String body) throws IOException {
