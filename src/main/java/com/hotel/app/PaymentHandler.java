@@ -70,7 +70,7 @@ public class PaymentHandler implements HttpHandler {
             res.put("order_id", order.get("id").toString());
             res.put("razorpay_key_id", RZP_KEY);
             res.put("amount", order.get("amount").toString());
-            res.put("payment_record_id", tempPrid); // Key matched with Flutter code
+            res.put("payment_record_id", tempPrid); 
             
             respond(ex, 200, res.toString());
         } catch (Exception e) {
@@ -101,15 +101,6 @@ public class PaymentHandler implements HttpHandler {
 
         try {
             if (Utils.verifyWebhookSignature(body, signature, WEBHOOK_SECRET)) {
-                JSONObject json = new JSONObject(body);
-                JSONObject payment = json.getJSONObject("payload").getJSONObject("payment").getJSONObject("entity");
-                
-                String orderId = payment.getString("order_id");
-                String paymentId = payment.getString("id");
-                double amount = payment.getDouble("amount") / 100.0;
-                
-                // Webhook usually doesn't have booking_id in root, 
-                // you'd typically look up the booking via order_id in a real scenario.
                 respond(ex, 200, "Webhook Processed");
             } else {
                 respond(ex, 401, "Invalid Webhook Signature");
@@ -124,7 +115,7 @@ public class PaymentHandler implements HttpHandler {
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
             conn.setAutoCommit(false);
             
-            String status = "Failed";
+            String status = "FAILED";
             String failureReason = "";
             try {
                 JSONObject attr = new JSONObject();
@@ -132,12 +123,12 @@ public class PaymentHandler implements HttpHandler {
                 attr.put("razorpay_payment_id", payid);
                 attr.put("razorpay_signature", sig);
                 Utils.verifyPaymentSignature(attr, RZP_SECRET);
-                status = "Paid";
+                status = "PAID";
             } catch (RazorpayException e) {
                 failureReason = e.getMessage();
             }
 
-            // Use existing PRID if available, else generate new
+            // Use intent-stage PRID or generate fresh if missing
             String finalPrid = (prid == null || prid.isEmpty()) ? UUID.randomUUID().toString() : prid;
             int attemptNo = nextAttempt(conn, bid);
             
@@ -156,10 +147,13 @@ public class PaymentHandler implements HttpHandler {
     private void insertPaymentRecord(Connection conn, String prid, String bid, String uid, String pid, String hid, 
                                      String oid, String payid, String sig, String status, String failure, 
                                      double amt, int attempt) throws SQLException {
-        String sql = "INSERT INTO payment_transactions (payment_record_id, booking_id, user_id, partner_id, hotel_id, " +
-                     "payment_gateway, gateway_order_id, gateway_payment_id, gateway_signature, payment_method, " +
-                     "payment_status, failure_reason, amount, currency, payment_attempt_no, is_refunded, " +
-                     "refund_amount, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())";
+        // Aligned with 19-column schema provided
+        String sql = "INSERT INTO payment_transactions (" +
+                     "payment_record_id, booking_id, user_id, partner_id, hotel_id, " +
+                     "payment_gateway, gateway_order_id, gateway_payment_id, gateway_signature, " +
+                     "payment_method, payment_status, failure_reason, amount, currency, " +
+                     "payment_attempt_no, is_refunded, refund_amount, created_at, updated_at" +
+                     ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())";
 
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, prid);
@@ -184,14 +178,15 @@ public class PaymentHandler implements HttpHandler {
     }
 
     private void updateBookingStatus(Connection conn, String bid, String status, String payId, String prid) throws SQLException {
-        // Correcting the enum cast for booking_status to match your schema requirements
+        // Sync status with bookings_info schema
         String sql = "UPDATE bookings_info SET payment_status = ?, transaction_id = ?, " +
-                     "last_payment_record_id = ?, booking_status = ?::booking_status_enum WHERE booking_id = ?";
+                     "last_payment_record_id = ?, booking_status = ?::booking_status_enum, " +
+                     "payment_confirmed_at = NOW() WHERE booking_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, status.toUpperCase()); // Matches PAID or FAILED
+            ps.setString(1, status); 
             ps.setString(2, payId);
             ps.setString(3, prid);
-            ps.setString(4, status.equalsIgnoreCase("Paid") ? "CONFIRMED" : "PENDING");
+            ps.setString(4, status.equalsIgnoreCase("PAID") ? "CONFIRMED" : "PENDING");
             ps.setString(5, bid);
             ps.executeUpdate();
         }
