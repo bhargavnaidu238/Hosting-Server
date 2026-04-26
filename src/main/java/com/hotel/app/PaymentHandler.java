@@ -61,7 +61,6 @@ public class PaymentHandler implements HttpHandler {
             orderReq.put("currency", "INR");
             orderReq.put("payment_capture", 1);
             
-            // Fresh PRID for tracking intent
             String tempPrid = UUID.randomUUID().toString();
 
             Order order = client.orders.create(orderReq);
@@ -114,19 +113,21 @@ public class PaymentHandler implements HttpHandler {
                                      String oid, String payid, String sig, double amt, String prid, boolean isWebhook) throws IOException {
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
             
-            // 1. IDEMPOTENCY CHECK: Prevent "Duplicate Key" crash if Razorpay retries or UI race condition occurs
+            // 1. FAST-EXIT IDEMPOTENCY CHECK
+            // Check this first to respond to the SDK as fast as possible if it's a retry
             if (payid != null && !payid.isEmpty()) {
-                PreparedStatement check = conn.prepareStatement("SELECT 1 FROM payment_transactions WHERE gateway_payment_id = ?");
-                check.setString(1, payid);
-                try (ResultSet rs = check.executeQuery()) {
-                    if (rs.next()) {
-                        if (!isWebhook) respond(ex, 200, json("status", "PAID", "message", "Already processed"));
-                        return;
+                try (PreparedStatement check = conn.prepareStatement("SELECT 1 FROM payment_transactions WHERE gateway_payment_id = ?")) {
+                    check.setString(1, payid);
+                    try (ResultSet rs = check.executeQuery()) {
+                        if (rs.next()) {
+                            if (!isWebhook) respond(ex, 200, json("status", "PAID", "message", "Processed"));
+                            return;
+                        }
                     }
                 }
             }
 
-            conn.setAutoCommit(false);
+            // 2. SIGNATURE VERIFICATION
             String status = "FAILED";
             String failureReason = "";
             try {
@@ -140,18 +141,27 @@ public class PaymentHandler implements HttpHandler {
                 failureReason = e.getMessage();
             }
 
-            String finalPrid = (prid == null || prid.isEmpty()) ? UUID.randomUUID().toString() : prid;
-            int attemptNo = nextAttempt(conn, bid);
-            
-            insertPaymentRecord(conn, finalPrid, bid, uid, pid, hid, oid, payid, sig, status, failureReason, amt, attemptNo);
-            updateBookingStatus(conn, bid, status, payid, finalPrid);
+            // 3. DATABASE UPDATE BLOCK
+            conn.setAutoCommit(false);
+            try {
+                String finalPrid = (prid == null || prid.isEmpty()) ? UUID.randomUUID().toString() : prid;
+                int attemptNo = nextAttempt(conn, bid);
+                
+                insertPaymentRecord(conn, finalPrid, bid, uid, pid, hid, oid, payid, sig, status, failureReason, amt, attemptNo);
+                updateBookingStatus(conn, bid, status, payid, finalPrid);
 
-            conn.commit();
+                conn.commit();
+            } catch (Exception e) {
+                conn.rollback();
+                throw e;
+            }
             
-            if(!isWebhook) respond(ex, 200, json("status", status, "record_id", finalPrid));
+            // 4. IMMEDIATE RESPONSE
+            if(!isWebhook) respond(ex, 200, json("status", status, "record_id", prid));
             
         } catch (Exception e) {
-            if(!isWebhook) respond(ex, 500, json("error", e.getMessage()));
+            e.printStackTrace();
+            if(!isWebhook) respond(ex, 500, json("error", "Verification failed internally"));
         }
     }
 
@@ -188,7 +198,7 @@ public class PaymentHandler implements HttpHandler {
     }
 
     private void updateBookingStatus(Connection conn, String bid, String status, String payId, String prid) throws SQLException {
-        String sql = "UPDATE bookings_info SET payment_status = ?, transaction_id = ?, " +
+        String sql = "UPDATE bookings_info SET payment_status = ?, transaction_id = ?, " + 
                      "last_payment_record_id = ?, booking_status = ?::booking_status_enum, " +
                      "payment_confirmed_at = NOW() WHERE booking_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -213,7 +223,7 @@ public class PaymentHandler implements HttpHandler {
     private void addCors(HttpExchange ex) {
         ex.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         ex.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
-        ex.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        ex.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
     }
 
     private void respond(HttpExchange ex, int code, String body) throws IOException {
