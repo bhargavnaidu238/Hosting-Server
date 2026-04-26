@@ -81,7 +81,7 @@ public class BookingHandler implements HttpHandler {
                     psUsage.setString(2, userId);
                     try (ResultSet rsUsage = psUsage.executeQuery()) {
                         if (rsUsage.next() && rsUsage.getInt("usage_count") >= limitPerUser) {
-                            sendResponse(exchange, 400, json("error", "Coupon limit reached for your account"));
+                            sendResponse(exchange, 400, json("error", "Coupon limit reached"));
                             return;
                         }
                     }
@@ -94,7 +94,7 @@ public class BookingHandler implements HttpHandler {
                             psCheck.setString(1, userId);
                             try (ResultSet rsCheck = psCheck.executeQuery()) {
                                 if (rsCheck.next() && rsCheck.getInt(1) > 0) {
-                                    sendResponse(exchange, 400, json("error", "Valid for first-time users only"));
+                                    sendResponse(exchange, 400, json("error", "Only for first-time users"));
                                     return;
                                 }
                             }
@@ -109,7 +109,7 @@ public class BookingHandler implements HttpHandler {
                     coupon.put("min_order_value", rs.getDouble("min_order_value"));
                     sendResponse(exchange, 200, objectMapper.writeValueAsString(coupon));
                 } else {
-                    sendResponse(exchange, 404, json("error", "Coupon code not found"));
+                    sendResponse(exchange, 404, json("error", "Invalid Coupon"));
                 }
             }
         } catch (SQLException e) {
@@ -132,19 +132,17 @@ public class BookingHandler implements HttpHandler {
                 if (walletAmt > 0) handleWalletUsage(conn, userId, bookingId, walletAmt);
                 if (!couponCode.isEmpty()) handleCouponUsage(conn, userId, couponCode);
 
-                String sql = """
-                    INSERT INTO bookings_info (
-                        partner_id, hotel_id, booking_id, hotel_name, booking_status, hotel_type, room_type, 
-                        user_id, guest_name, email, check_in_date, check_out_date, guest_count, adults, 
-                        children, total_rooms_booked, total_days_at_stay, room_price_per_day, room_price_per_month, 
-                        months, all_days_price, gst, original_amount, payment_method_type, payment_status, 
-                        wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount, 
-                        final_payable_amount, amount_paid_online, due_amount_at_hotel, paid_via, transaction_id, 
-                        last_payment_record_id, hotel_address, hotel_contact
-                    ) VALUES (
-                        ?,?,?,?,?::booking_status_enum,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::yes_no_enum,?,?,?,?,?,?,?,?,?,?
-                    )
-                """;
+                String sql = "INSERT INTO bookings_info (" +
+                    "partner_id, hotel_id, booking_id, hotel_name, booking_status, hotel_type, room_type, " +
+                    "user_id, guest_name, email, check_in_date, check_out_date, guest_count, adults, " +
+                    "children, total_rooms_booked, total_days_at_stay, room_price_per_day, room_price_per_month, " +
+                    "months, all_days_price, gst, original_amount, payment_method_type, payment_status, " +
+                    "wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount, " +
+                    "final_payable_amount, amount_paid_online, due_amount_at_hotel, paid_via, transaction_id, " +
+                    "last_payment_record_id, hotel_address, hotel_contact" +
+                    ") VALUES (" +
+                    "?,?,?,?,?::booking_status_enum,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::yes_no_enum,?,?,?,?,?,?,?,?,?,?" +
+                    ")";
                 
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setString(1, str(data.get("partner_id")));
@@ -169,7 +167,7 @@ public class BookingHandler implements HttpHandler {
                     ps.setInt(20, toInt(data.get("months")));
                     ps.setDouble(21, toDouble(data.get("all_days_price")));
                     ps.setDouble(22, toDouble(data.get("gst")));
-                    ps.setDouble(23, toDouble(data.get("total_price"))); // original_amount
+                    ps.setDouble(23, toDouble(data.get("total_price")));
                     ps.setString(24, str(data.get("payment_method_type")));
                     ps.setString(25, str(data.get("payment_status")));
                     ps.setString(26, str(data.get("wallet_used")));
@@ -188,10 +186,11 @@ public class BookingHandler implements HttpHandler {
                 }
 
                 conn.commit();
+                // FIXED: Now calling overloaded json() with 4 arguments
                 sendResponse(exchange, 200, json("message", "Success", "booking_id", bookingId));
             } catch (Exception e) {
                 conn.rollback();
-                sendResponse(exchange, 500, json("error", e.getMessage()));
+                throw e;
             }
         } catch (Exception e) {
             sendResponse(exchange, 500, json("error", e.getMessage()));
@@ -330,6 +329,12 @@ public class BookingHandler implements HttpHandler {
         ex.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
     }
 
-    private String json(String k, String v) { return "{\"" + k + "\":\"" + v + "\"}"; }
-    private String json(String k1, String v1, String k2, String v2) { return "{\"" + k1 + "\":\"" + v1 + "\",\"" + k2 + "\":\"" + v2 + "\"}"; }
+    // Helper methods for JSON
+    private String json(String k, String v) { 
+        return "{\"" + k + "\":\"" + v + "\"}"; 
+    }
+
+    private String json(String k1, String v1, String k2, String v2) {
+        return "{\"" + k1 + "\":\"" + v1 + "\",\"" + k2 + "\":\"" + v2 + "\"}";
+    }
 }
