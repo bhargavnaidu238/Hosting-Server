@@ -61,7 +61,7 @@ public class PaymentHandler implements HttpHandler {
             orderReq.put("currency", "INR");
             orderReq.put("payment_capture", 1);
             
-            // Generate a temporary Payment Record ID to track the intent
+            // Fresh PRID for tracking intent
             String tempPrid = UUID.randomUUID().toString();
 
             Order order = client.orders.create(orderReq);
@@ -113,8 +113,20 @@ public class PaymentHandler implements HttpHandler {
     private void processPaymentUpdate(HttpExchange ex, String bid, String uid, String pid, String hid, 
                                      String oid, String payid, String sig, double amt, String prid, boolean isWebhook) throws IOException {
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
-            conn.setAutoCommit(false);
             
+            // 1. IDEMPOTENCY CHECK: Prevent "Duplicate Key" crash if Razorpay retries or UI race condition occurs
+            if (payid != null && !payid.isEmpty()) {
+                PreparedStatement check = conn.prepareStatement("SELECT 1 FROM payment_transactions WHERE gateway_payment_id = ?");
+                check.setString(1, payid);
+                try (ResultSet rs = check.executeQuery()) {
+                    if (rs.next()) {
+                        if (!isWebhook) respond(ex, 200, json("status", "PAID", "message", "Already processed"));
+                        return;
+                    }
+                }
+            }
+
+            conn.setAutoCommit(false);
             String status = "FAILED";
             String failureReason = "";
             try {
@@ -128,7 +140,6 @@ public class PaymentHandler implements HttpHandler {
                 failureReason = e.getMessage();
             }
 
-            // Use intent-stage PRID or generate fresh if missing
             String finalPrid = (prid == null || prid.isEmpty()) ? UUID.randomUUID().toString() : prid;
             int attemptNo = nextAttempt(conn, bid);
             
@@ -147,7 +158,6 @@ public class PaymentHandler implements HttpHandler {
     private void insertPaymentRecord(Connection conn, String prid, String bid, String uid, String pid, String hid, 
                                      String oid, String payid, String sig, String status, String failure, 
                                      double amt, int attempt) throws SQLException {
-        // Aligned with 19-column schema provided
         String sql = "INSERT INTO payment_transactions (" +
                      "payment_record_id, booking_id, user_id, partner_id, hotel_id, " +
                      "payment_gateway, gateway_order_id, gateway_payment_id, gateway_signature, " +
@@ -178,7 +188,6 @@ public class PaymentHandler implements HttpHandler {
     }
 
     private void updateBookingStatus(Connection conn, String bid, String status, String payId, String prid) throws SQLException {
-        // Sync status with bookings_info schema
         String sql = "UPDATE bookings_info SET payment_status = ?, transaction_id = ?, " +
                      "last_payment_record_id = ?, booking_status = ?::booking_status_enum, " +
                      "payment_confirmed_at = NOW() WHERE booking_id = ?";
@@ -195,15 +204,16 @@ public class PaymentHandler implements HttpHandler {
     private int nextAttempt(Connection conn, String bid) throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement("SELECT COUNT(*) FROM payment_transactions WHERE booking_id = ?")) {
             ps.setString(1, bid);
-            ResultSet rs = ps.executeQuery();
-            return rs.next() ? rs.getInt(1) + 1 : 1;
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) + 1 : 1;
+            }
         }
     }
 
     private void addCors(HttpExchange ex) {
         ex.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         ex.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
-        ex.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
+        ex.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
     }
 
     private void respond(HttpExchange ex, int code, String body) throws IOException {
