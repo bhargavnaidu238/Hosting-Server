@@ -81,7 +81,7 @@ public class BookingHandler implements HttpHandler {
                     psUsage.setString(2, userId);
                     try (ResultSet rsUsage = psUsage.executeQuery()) {
                         if (rsUsage.next() && rsUsage.getInt("usage_count") >= limitPerUser) {
-                            sendResponse(exchange, 400, json("error", "Usage limit exceeded for this coupon"));
+                            sendResponse(exchange, 400, json("error", "Coupon limit reached for your account"));
                             return;
                         }
                     }
@@ -94,7 +94,7 @@ public class BookingHandler implements HttpHandler {
                             psCheck.setString(1, userId);
                             try (ResultSet rsCheck = psCheck.executeQuery()) {
                                 if (rsCheck.next() && rsCheck.getInt(1) > 0) {
-                                    sendResponse(exchange, 400, json("error", "Valid for first booking only"));
+                                    sendResponse(exchange, 400, json("error", "Valid for first-time users only"));
                                     return;
                                 }
                             }
@@ -109,7 +109,7 @@ public class BookingHandler implements HttpHandler {
                     coupon.put("min_order_value", rs.getDouble("min_order_value"));
                     sendResponse(exchange, 200, objectMapper.writeValueAsString(coupon));
                 } else {
-                    sendResponse(exchange, 404, json("error", "Invalid or inactive coupon"));
+                    sendResponse(exchange, 404, json("error", "Coupon code not found"));
                 }
             }
         } catch (SQLException e) {
@@ -123,41 +123,67 @@ public class BookingHandler implements HttpHandler {
 
         String bookingId = generateBookingId();
         String userId = str(data.get("user_id"));
-        double walletRequested = toDouble(data.get("wallet_amount_deducted"));
+        double walletAmt = toDouble(data.get("wallet_amount_deducted"));
         String couponCode = str(data.get("coupon_code"));
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
             conn.setAutoCommit(false);
             try {
-                if (walletRequested > 0) {
-                    handleWalletUsage(conn, userId, bookingId, walletRequested);
-                }
+                if (walletAmt > 0) handleWalletUsage(conn, userId, bookingId, walletAmt);
+                if (!couponCode.isEmpty()) handleCouponUsage(conn, userId, couponCode);
 
-                if (!couponCode.isEmpty()) {
-                    handleCouponUsage(conn, userId, couponCode);
-                }
-
-                // UPDATED SQL: Aligned column names with your database schema
-                String sql = "INSERT INTO bookings_info (partner_id, hotel_id, booking_id, hotel_name, guest_name, email, user_id, " +
-                             "original_amount, final_payable_amount, wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount, " +
-                             "payment_status, booking_status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())";
+                String sql = """
+                    INSERT INTO bookings_info (
+                        partner_id, hotel_id, booking_id, hotel_name, booking_status, hotel_type, room_type, 
+                        user_id, guest_name, email, check_in_date, check_out_date, guest_count, adults, 
+                        children, total_rooms_booked, total_days_at_stay, room_price_per_day, room_price_per_month, 
+                        months, all_days_price, gst, original_amount, payment_method_type, payment_status, 
+                        wallet_used, wallet_amount_deducted, coupon_code, coupon_discount_amount, 
+                        final_payable_amount, amount_paid_online, due_amount_at_hotel, paid_via, transaction_id, 
+                        last_payment_record_id, hotel_address, hotel_contact
+                    ) VALUES (
+                        ?,?,?,?,?::booking_status_enum,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::yes_no_enum,?,?,?,?,?,?,?,?,?,?
+                    )
+                """;
                 
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setString(1, str(data.get("partner_id")));
                     ps.setString(2, str(data.get("hotel_id")));
                     ps.setString(3, bookingId);
                     ps.setString(4, str(data.get("hotel_name")));
-                    ps.setString(5, str(data.get("guest_name")));
-                    ps.setString(6, str(data.get("email")));
-                    ps.setString(7, userId);
-                    ps.setDouble(8, toDouble(data.get("total_price"))); // Maps to original_amount
-                    ps.setDouble(9, toDouble(data.get("final_payable_amount")));
-                    ps.setString(10, str(data.get("wallet_used")));
-                    ps.setDouble(11, walletRequested);
-                    ps.setString(12, couponCode);
-                    ps.setDouble(13, toDouble(data.get("coupon_discount_amount")));
-                    ps.setString(14, str(data.get("payment_status")));
-                    ps.setString(15, str(data.get("booking_status")));
+                    ps.setString(5, str(data.getOrDefault("booking_status", "PENDING")));
+                    ps.setString(6, str(data.get("hotel_type")));
+                    ps.setString(7, str(data.get("room_type")));
+                    ps.setString(8, userId);
+                    ps.setString(9, str(data.get("guest_name")));
+                    ps.setString(10, str(data.get("email")));
+                    ps.setDate(11, parseSqlDate(data.get("check_in_date")));
+                    ps.setDate(12, parseSqlDate(data.get("check_out_date")));
+                    ps.setInt(13, toInt(data.get("guest_count")));
+                    ps.setInt(14, toInt(data.get("adults")));
+                    ps.setInt(15, toInt(data.get("children")));
+                    ps.setInt(16, toInt(data.get("total_rooms_booked")));
+                    ps.setInt(17, toInt(data.get("total_days_at_stay")));
+                    ps.setDouble(18, toDouble(data.get("room_price_per_day")));
+                    ps.setString(19, str(data.get("room_price_per_month")));
+                    ps.setInt(20, toInt(data.get("months")));
+                    ps.setDouble(21, toDouble(data.get("all_days_price")));
+                    ps.setDouble(22, toDouble(data.get("gst")));
+                    ps.setDouble(23, toDouble(data.get("total_price"))); // original_amount
+                    ps.setString(24, str(data.get("payment_method_type")));
+                    ps.setString(25, str(data.get("payment_status")));
+                    ps.setString(26, str(data.get("wallet_used")));
+                    ps.setDouble(27, walletAmt);
+                    ps.setString(28, couponCode);
+                    ps.setDouble(29, toDouble(data.get("coupon_discount_amount")));
+                    ps.setDouble(30, toDouble(data.get("final_payable_amount")));
+                    ps.setDouble(31, toDouble(data.get("amount_paid_online")));
+                    ps.setDouble(32, toDouble(data.get("due_amount_at_hotel")));
+                    ps.setString(33, str(data.get("paid_via")));
+                    ps.setString(34, str(data.get("transaction_id")));
+                    ps.setString(35, str(data.get("last_payment_record_id")));
+                    ps.setString(36, str(data.get("hotel_address")));
+                    ps.setString(37, str(data.get("hotel_contact")));
                     ps.executeUpdate();
                 }
 
@@ -199,7 +225,7 @@ public class BookingHandler implements HttpHandler {
             ps.setString(5, "DEBIT");
             ps.setString(6, bId);
             ps.setString(7, "SUCCESS");
-            ps.setString(8, "Stay Booking " + bId);
+            ps.setString(8, "Booking " + bId);
             ps.setDouble(9, balance - req);
             ps.executeUpdate();
         }
@@ -252,12 +278,12 @@ public class BookingHandler implements HttpHandler {
             psTxn.setString(1, "REF" + System.currentTimeMillis());
             psTxn.setDouble(2, amount);
             psTxn.setString(3, bId);
-            psTxn.setString(4, "Gateway Failure Refund for " + bId);
+            psTxn.setString(4, "Payment failure refund for " + bId);
             psTxn.setString(5, userId);
             psTxn.executeUpdate();
 
             conn.commit();
-            sendResponse(exchange, 200, json("message", "Rollback Successful"));
+            sendResponse(exchange, 200, json("message", "Refund processed"));
         } catch (Exception e) {
             sendResponse(exchange, 500, json("error", e.getMessage()));
         }
@@ -266,6 +292,21 @@ public class BookingHandler implements HttpHandler {
     private String generateBookingId() { return "BKG" + (100000 + new Random().nextInt(900000)); }
     private double toDouble(Object o) { if (o == null) return 0; try { return Double.parseDouble(o.toString()); } catch (Exception e) { return 0; } }
     private String str(Object o) { return o == null ? "" : o.toString().trim(); }
+    private int toInt(Object o) { if (o == null) return 0; try { return Integer.parseInt(o.toString()); } catch (Exception e) { return 0; } }
+    
+    private java.sql.Date parseSqlDate(Object val) {
+        if (val == null || val.toString().isEmpty()) return null;
+        try {
+            String s = val.toString().trim();
+            if (s.contains("-")) {
+                String[] p = s.split("-");
+                if (p[0].length() == 4) return java.sql.Date.valueOf(s);
+                return java.sql.Date.valueOf(p[2] + "-" + p[1] + "-" + p[0]);
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
     private Map<String, String> queryToMap(String query) {
         Map<String, String> result = new HashMap<>();
         if (query == null) return result;
@@ -275,17 +316,20 @@ public class BookingHandler implements HttpHandler {
         }
         return result;
     }
+
     private void sendResponse(HttpExchange ex, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().set("Content-Type", "application/json");
         ex.sendResponseHeaders(status, bytes.length);
         try (OutputStream os = ex.getResponseBody()) { os.write(bytes); }
     }
+
     private void addCorsHeaders(HttpExchange ex) {
         ex.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         ex.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
         ex.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
     }
+
     private String json(String k, String v) { return "{\"" + k + "\":\"" + v + "\"}"; }
-    private String json(String k, String v, String k2, String v2) { return "{\"" + k + "\":\"" + v + "\",\"" + k2 + "\":\"" + v2 + "\"}"; }
+    private String json(String k1, String v1, String k2, String v2) { return "{\"" + k1 + "\":\"" + v1 + "\",\"" + k2 + "\":\"" + v2 + "\"}"; }
 }
