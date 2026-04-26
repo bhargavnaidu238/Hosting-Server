@@ -61,6 +61,7 @@ public class PaymentHandler implements HttpHandler {
             orderReq.put("currency", "INR");
             orderReq.put("payment_capture", 1);
             
+            // This ID will be used to track the attempt in the Flutter frontend
             String tempPrid = UUID.randomUUID().toString();
 
             Order order = client.orders.create(orderReq);
@@ -113,14 +114,14 @@ public class PaymentHandler implements HttpHandler {
                                      String oid, String payid, String sig, double amt, String prid, boolean isWebhook) throws IOException {
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
             
-            // 1. FAST-EXIT IDEMPOTENCY CHECK
-            // Check this first to respond to the SDK as fast as possible if it's a retry
+            // 1. IDEMPOTENCY CHECK
+            // If this payment ID already exists, the transaction is already complete.
             if (payid != null && !payid.isEmpty()) {
                 try (PreparedStatement check = conn.prepareStatement("SELECT 1 FROM payment_transactions WHERE gateway_payment_id = ?")) {
                     check.setString(1, payid);
                     try (ResultSet rs = check.executeQuery()) {
                         if (rs.next()) {
-                            if (!isWebhook) respond(ex, 200, json("status", "PAID", "message", "Processed"));
+                            if (!isWebhook) respond(ex, 200, json("status", "PAID", "message", "Already Processed"));
                             return;
                         }
                     }
@@ -138,13 +139,15 @@ public class PaymentHandler implements HttpHandler {
                 Utils.verifyPaymentSignature(attr, RZP_SECRET);
                 status = "PAID";
             } catch (RazorpayException e) {
+                status = "FAILED";
                 failureReason = e.getMessage();
             }
 
             // 3. DATABASE UPDATE BLOCK
             conn.setAutoCommit(false);
             try {
-                String finalPrid = (prid == null || prid.isEmpty()) ? UUID.randomUUID().toString() : prid;
+                // Use the ID provided by the frontend for consistency
+                String finalPrid = (prid == null || prid.trim().isEmpty()) ? UUID.randomUUID().toString() : prid;
                 int attemptNo = nextAttempt(conn, bid);
                 
                 insertPaymentRecord(conn, finalPrid, bid, uid, pid, hid, oid, payid, sig, status, failureReason, amt, attemptNo);
@@ -156,12 +159,12 @@ public class PaymentHandler implements HttpHandler {
                 throw e;
             }
             
-            // 4. IMMEDIATE RESPONSE
+            // 4. FINAL RESPONSE
             if(!isWebhook) respond(ex, 200, json("status", status, "record_id", prid));
             
         } catch (Exception e) {
             e.printStackTrace();
-            if(!isWebhook) respond(ex, 500, json("error", "Verification failed internally"));
+            if(!isWebhook) respond(ex, 500, json("error", "Payment verification internal failure"));
         }
     }
 
