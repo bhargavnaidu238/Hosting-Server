@@ -65,7 +65,7 @@ public class AddHotelsHandler implements HttpHandler {
                 hotelId = "HOTEL_" + System.currentTimeMillis();
             }
 
-            // Image Processing
+            // Image Processing with Folder Creation Requirement
             if (params.containsKey("images")) {
                 try {
                     JSONObject json = new JSONObject(params.get("images"));
@@ -83,12 +83,16 @@ public class AddHotelsHandler implements HttpHandler {
                             }
                             
                             byte[] data = Base64.getDecoder().decode(base64Data);
-                            String fileName = hotelId + "_" + safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
+                            String fileName = safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
                             
                             String finalUrl;
                             if (isProduction) {
-                                finalUrl = HotelBookingServer.uploadToSupabase(data, fileName);
+                                // Requirement 2: Handling folders in Supabase via pathing
+                                // Path: hotel_id/filename.jpg
+                                String supabasePath = hotelId + "/" + fileName;
+                                finalUrl = HotelBookingServer.uploadToSupabase(data, supabasePath);
                             } else {
+                                // Local Folder Creation Logic
                                 File dir = new File(dbConfig.getHotelImagesPath() + File.separator + hotelId + File.separator + safeCategory);
                                 if (!dir.exists()) dir.mkdirs();
                                 File f = new File(dir, fileName);
@@ -132,8 +136,9 @@ public class AddHotelsHandler implements HttpHandler {
         return false;
     }
 
+    // Requirement 1: SQL Updated for separate latitude and longitude columns
     private boolean addHotelToDB(String hotelId, Map<String, String> params) throws SQLException {
-        String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, avg_rating, total_reviews, hotel_contact, about_this_property, hotel_images, customization, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, latitude, longitude, total_rooms, available_rooms, room_price, amenities, policies, avg_rating, total_reviews, hotel_contact, about_this_property, hotel_images, customization, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, true);
@@ -141,8 +146,9 @@ public class AddHotelsHandler implements HttpHandler {
         }
     }
 
+    // Requirement 1: SQL Updated for separate latitude and longitude columns
     private boolean updateHotelInDB(String hotelId, Map<String, String> params) throws SQLException {
-        String sql = "UPDATE hotels_info SET hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
+        String sql = "UPDATE hotels_info SET hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, latitude=?, longitude=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, false);
@@ -163,14 +169,19 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setString(idx++, params.getOrDefault("state", ""));
         stmt.setString(idx++, params.getOrDefault("country", ""));
         stmt.setString(idx++, params.getOrDefault("pincode", ""));
-        stmt.setString(idx++, params.getOrDefault("hotel_location", ""));
+
+        // Requirement 1: Handle separate Lat/Lng mapping
+        double lat = Double.parseDouble(params.getOrDefault("latitude", "0.0"));
+        double lng = Double.parseDouble(params.getOrDefault("longitude", "0.0"));
+        stmt.setDouble(idx++, lat);
+        stmt.setDouble(idx++, lng);
+
         stmt.setInt(idx++, Integer.parseInt(params.getOrDefault("total_rooms", "0")));
         stmt.setInt(idx++, Integer.parseInt(params.getOrDefault("available_rooms", params.getOrDefault("total_rooms", "0"))));
         stmt.setString(idx++, params.getOrDefault("room_price", ""));
         stmt.setString(idx++, params.getOrDefault("amenities", ""));
         stmt.setString(idx++, params.getOrDefault("policies", ""));
 
-        // Handle rating logic
         if (isInsert) {
             stmt.setDouble(idx++, 0.0); // avg_rating default
             stmt.setInt(idx++, 0);      // total_reviews default
