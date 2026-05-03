@@ -78,23 +78,25 @@ public class AddPgHandler implements HttpHandler {
                         if (base64.contains(",")) base64 = base64.split(",")[1];
 
                         byte[] data = Base64.getDecoder().decode(base64);
-                        String fileName = pgId + "_" + safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
+                        
+                        // Define base file name
+                        String baseFileName = safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
 
                         if (isProduction) {
-                            savedUrls.add(HotelBookingServer.uploadToSupabase(data, fileName));
+                            // ✅ FIXED: Prepend pgId/ to the filename to create a folder in Supabase Storage
+                            String supabaseFilePath = pgId + "/" + baseFileName;
+                            savedUrls.add(HotelBookingServer.uploadToSupabase(data, supabaseFilePath));
                         } else {
-                            // Saving to local folder relative to pgId
+                            // Local storage logic
                             File dir = new File(dbConfig.getHotelImagesPath() + File.separator + pgId + File.separator + safeCategory);
                             if (!dir.exists()) dir.mkdirs();
-                            File f = new File(dir, fileName);
+                            File f = new File(dir, baseFileName);
                             Files.write(f.toPath(), data);
-                            // URL for frontend to access the stored file
-                            savedUrls.add("http://localhost:8080/hotel_images/" + pgId + "/" + safeCategory + "/" + fileName);
+                            savedUrls.add("http://localhost:8080/hotel_images/" + pgId + "/" + safeCategory + "/" + baseFileName);
                         }
                     }
                 }
                 if (!savedUrls.isEmpty()) {
-                    // This maps to the pg_images column in your table
                     params.put("hotel_images_csv", String.join(",", savedUrls));
                 }
             }
@@ -134,7 +136,6 @@ public class AddPgHandler implements HttpHandler {
     }
 
     private boolean addPGToDB(String pgId, Map<String, String> params) throws SQLException {
-        // Updated to use latitude and longitude columns instead of hotel_location
         String sql = "INSERT INTO paying_guest_info (pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, latitude, longitude, total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, total_four_sharing_rooms, total_five_sharing_rooms, available_rooms, room_price, amenities, policies, avg_rating, total_reviews, pg_contact, about_this_pg, pg_images, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::pg_status_enum)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -144,7 +145,6 @@ public class AddPgHandler implements HttpHandler {
     }
 
     private boolean updatePGInDB(String pgId, Map<String, String> params) throws SQLException {
-        // Updated to use latitude and longitude columns instead of hotel_location
         String sql = "UPDATE paying_guest_info SET partner_id=?, pg_name=?, pg_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, latitude=?, longitude=?, total_single_sharing_rooms=?, total_double_sharing_rooms=?, total_three_sharing_rooms=?, total_four_sharing_rooms=?, total_five_sharing_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, avg_rating=?, total_reviews=?, pg_contact=?, about_this_pg=?, pg_images=?, status=?::pg_status_enum WHERE pg_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -167,7 +167,6 @@ public class AddPgHandler implements HttpHandler {
         stmt.setString(i++, params.getOrDefault("country", ""));
         stmt.setString(i++, params.getOrDefault("pincode", ""));
 
-        // Latitude & Longitude (Split columns)
         stmt.setBigDecimal(i++, parseDecimalSafe(params.get("latitude")));
         stmt.setBigDecimal(i++, parseDecimalSafe(params.get("longitude")));
 
@@ -187,7 +186,6 @@ public class AddPgHandler implements HttpHandler {
 
         stmt.setString(i++, params.getOrDefault("pg_contact", ""));
         stmt.setString(i++, params.getOrDefault("about_this_pg", ""));
-        // Using the list of URLs generated in the image handling block
         stmt.setString(i++, params.getOrDefault("hotel_images_csv", ""));
 
         String status = params.getOrDefault("status", "Active");
