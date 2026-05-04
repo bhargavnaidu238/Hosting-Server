@@ -65,10 +65,11 @@ public class WebViewPGsHandler implements HttpHandler {
     private List<String> fetchPGsFromDB(String partnerId) throws SQLException {
         List<String> pgRows = new ArrayList<>();
 
+        // UPDATED SQL: Replaced hotel_location with latitude and longitude
         String sql =
             "SELECT pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, " +
-            "total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, " +
-            "total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, " +
+            "latitude, longitude, total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, " +
+            "total_four_sharing_rooms, total_five_sharing_rooms, available_rooms, " +
             "room_price, amenities, policies, avg_rating, total_reviews, pg_contact, about_this_pg, pg_images, status " +
             "FROM paying_guest_info WHERE partner_id = ?";
 
@@ -81,13 +82,16 @@ public class WebViewPGsHandler implements HttpHandler {
                 while (rs.next()) {
                     List<String> row = new ArrayList<>();
 
-                    for (int i = 1; i <= 26; i++) {
+                    // Explicitly looping 1-27 because we now have 27 columns
+                    for (int i = 1; i <= 27; i++) {
                         row.add(escapeCell(rs.getString(i)));
                     }
 
-                    int total = safeInt(rs.getString(11)) + safeInt(rs.getString(12)) + 
-                                safeInt(rs.getString(13)) + safeInt(rs.getString(14)) + 
-                                safeInt(rs.getString(15));
+                    // UPDATED indices for room count sum (13, 14, 15, 16, 17)
+                    // Resulting from shifting after adding latitude/longitude
+                    int total = safeInt(rs.getString(13)) + safeInt(rs.getString(14)) + 
+                                safeInt(rs.getString(15)) + safeInt(rs.getString(16)) + 
+                                safeInt(rs.getString(17));
                     
                     row.add(String.valueOf(total)); 
 

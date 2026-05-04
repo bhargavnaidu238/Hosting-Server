@@ -22,6 +22,7 @@ import com.hotel.app.ProfileHandler;
 import com.hotel.app.RegisterHandler;
 import com.hotel.app.ReviewsHandler;
 import com.hotel.app.RewardsWalletHandler;
+import com.hotel.app.UserPreferenceHandler;
 import com.hotel.notification.service.EmailHandler;
 import com.hotel.utilities.DbConfig;
 import com.hotel.utilities.HotelImagesHandler;
@@ -67,14 +68,18 @@ public class HotelBookingServer {
         server.createContext("/hotels", new HotelsHandler(dbConfig));
         server.createContext("/paying_guest", new PgsHandler(dbConfig));
         server.createContext("/booking", new BookingHandler(dbConfig));
+        server.createContext("/getWalletBalance", new BookingHandler(dbConfig));
+        server.createContext("/validateCoupon", new BookingHandler(dbConfig));
         server.createContext("/profile", new ProfileHandler(dbConfig));
         server.createContext("/app/change-password", new ProfileHandler(dbConfig));
         server.createContext("/booking-history", new BookingHistoryHandler(dbConfig));
         server.createContext("/cancel-booking", new BookingHistoryHandler(dbConfig));
         server.createContext("/update-booking-dates", new BookingHistoryHandler(dbConfig));
         server.createContext("/filterHotels", new AppFilterHandler(dbConfig));
+        server.createContext("/customize", new BookingHistoryHandler(dbConfig));
         
         // ========== WALLET & PAYMENTS ==========
+        server.createContext("/user-rewards-full", new RewardsWalletHandler(dbConfig));
         server.createContext("/wallet", new RewardsWalletHandler(dbConfig));
         server.createContext("/wallet/deposit", new RewardsWalletHandler(dbConfig));
         server.createContext("/wallet/pay", new RewardsWalletHandler(dbConfig));
@@ -82,8 +87,7 @@ public class HotelBookingServer {
         server.createContext("/referrals", new RewardsWalletHandler(dbConfig));
         server.createContext("/payment/createOrder", new PaymentHandler(dbConfig));
         server.createContext("/payment/verify", new PaymentHandler(dbConfig));
-        server.createContext("/razorpay/webhook", new PaymentHandler(dbConfig));
-        server.createContext("/payment/refund", new PaymentHandler(dbConfig));
+        server.createContext("/payment/webhook", new PaymentHandler(dbConfig));
 
         // ========== WEB ==========
         server.createContext("/weblogin", new WebLoginRegisterHandler(dbConfig));

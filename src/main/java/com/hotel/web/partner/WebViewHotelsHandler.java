@@ -18,7 +18,7 @@ public class WebViewHotelsHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-       
+        
         exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
         exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "POST, OPTIONS");
         exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
@@ -59,8 +59,9 @@ public class WebViewHotelsHandler implements HttpHandler {
     private List<String> fetchHotelsFromDB(String partnerId) throws SQLException {
         List<String> hotelRows = new ArrayList<>();
         
+        // Updated SQL: Removed hotel_location, added latitude and longitude
         String sql = "SELECT hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, " +
-                     "hotel_location, total_rooms, available_rooms, room_price, amenities, policies, hotel_contact, " +
+                     "latitude, longitude, total_rooms, available_rooms, room_price, amenities, policies, hotel_contact, " +
                      "about_this_property, hotel_images, customization, status, avg_rating, total_reviews " +
                      "FROM hotels_info WHERE partner_id = ?";
 
@@ -71,8 +72,8 @@ public class WebViewHotelsHandler implements HttpHandler {
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
                     List<String> cells = new ArrayList<>();
-                    // Explicitly looping 1-23 because we now have 23 columns
-                    for (int i = 1; i <= 23; i++) {
+                    // Explicitly looping 1-24 because we now have 24 columns in the schema
+                    for (int i = 1; i <= 24; i++) {
                         String val = rs.getString(i);
                         cells.add(escapeCell(val));
                     }

@@ -65,7 +65,6 @@ public class AddHotelsHandler implements HttpHandler {
                 hotelId = "HOTEL_" + System.currentTimeMillis();
             }
 
-            // Image Processing
             if (params.containsKey("images")) {
                 try {
                     JSONObject json = new JSONObject(params.get("images"));
@@ -83,17 +82,19 @@ public class AddHotelsHandler implements HttpHandler {
                             }
                             
                             byte[] data = Base64.getDecoder().decode(base64Data);
-                            String fileName = hotelId + "_" + safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
+                            String fileName = safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
                             
                             String finalUrl;
+                            // FIX: Exclusive block to prevent image creation outside the folder
                             if (isProduction) {
-                                finalUrl = HotelBookingServer.uploadToSupabase(data, fileName);
+                                String supabasePath = hotelId + "/" + fileName;
+                                finalUrl = HotelBookingServer.uploadToSupabase(data, supabasePath);
                             } else {
-                                File dir = new File(dbConfig.getHotelImagesPath() + File.separator + hotelId + File.separator + safeCategory);
+                                File dir = new File(dbConfig.getHotelImagesPath() + File.separator + hotelId);
                                 if (!dir.exists()) dir.mkdirs();
                                 File f = new File(dir, fileName);
                                 Files.write(f.toPath(), data);
-                                finalUrl = "http://localhost:8080/hotel_images/" + hotelId + "/" + safeCategory + "/" + fileName;
+                                finalUrl = "http://localhost:8080/hotel_images/" + hotelId + "/" + fileName;
                             }
                             savedUrls.add(finalUrl);
                         }
@@ -133,7 +134,7 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean addHotelToDB(String hotelId, Map<String, String> params) throws SQLException {
-        String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, hotel_location, total_rooms, available_rooms, room_price, amenities, policies, avg_rating, total_reviews, hotel_contact, about_this_property, hotel_images, customization, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO hotels_info (hotel_id, partner_id, hotel_name, hotel_type, room_type, address, city, state, country, pincode, latitude, longitude, total_rooms, available_rooms, room_price, amenities, policies, avg_rating, total_reviews, hotel_contact, about_this_property, hotel_images, customization, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, true);
@@ -142,7 +143,7 @@ public class AddHotelsHandler implements HttpHandler {
     }
 
     private boolean updateHotelInDB(String hotelId, Map<String, String> params) throws SQLException {
-        String sql = "UPDATE hotels_info SET hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, hotel_location=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
+        String sql = "UPDATE hotels_info SET hotel_name=?, hotel_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, latitude=?, longitude=?, total_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, hotel_contact=?, about_this_property=?, hotel_images=?, customization=?, status=? WHERE hotel_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setHotelParams(stmt, hotelId, params, false);
@@ -163,17 +164,27 @@ public class AddHotelsHandler implements HttpHandler {
         stmt.setString(idx++, params.getOrDefault("state", ""));
         stmt.setString(idx++, params.getOrDefault("country", ""));
         stmt.setString(idx++, params.getOrDefault("pincode", ""));
-        stmt.setString(idx++, params.getOrDefault("hotel_location", ""));
+
+        // FIX: Enhanced parsing logic to ensure Lat/Lng are not saved as zero
+        String latStr = params.get("latitude");
+        String lngStr = params.get("longitude");
+        try {
+            stmt.setDouble(idx++, (latStr != null && !latStr.isEmpty()) ? Double.parseDouble(latStr) : 0.0);
+            stmt.setDouble(idx++, (lngStr != null && !lngStr.isEmpty()) ? Double.parseDouble(lngStr) : 0.0);
+        } catch (NumberFormatException e) {
+            stmt.setDouble(idx-2, 0.0);
+            stmt.setDouble(idx-1, 0.0);
+        }
+
         stmt.setInt(idx++, Integer.parseInt(params.getOrDefault("total_rooms", "0")));
         stmt.setInt(idx++, Integer.parseInt(params.getOrDefault("available_rooms", params.getOrDefault("total_rooms", "0"))));
         stmt.setString(idx++, params.getOrDefault("room_price", ""));
         stmt.setString(idx++, params.getOrDefault("amenities", ""));
         stmt.setString(idx++, params.getOrDefault("policies", ""));
 
-        // Handle rating logic
         if (isInsert) {
-            stmt.setDouble(idx++, 0.0); // avg_rating default
-            stmt.setInt(idx++, 0);      // total_reviews default
+            stmt.setDouble(idx++, 0.0); 
+            stmt.setInt(idx++, 0);      
         }
         stmt.setString(idx++, params.getOrDefault("hotel_contact", ""));
         stmt.setString(idx++, params.getOrDefault("about_this_property", ""));

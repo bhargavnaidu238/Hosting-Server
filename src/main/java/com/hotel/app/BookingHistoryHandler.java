@@ -25,16 +25,34 @@ public class BookingHistoryHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+        exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+
+        if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
+            exchange.sendResponseHeaders(204, -1);
+            return;
+        }
+
         switch (exchange.getRequestMethod().toUpperCase()) {
             case "GET" -> handleBookingHistory(exchange);
             case "PUT" -> handlePutRequests(exchange);
+            case "POST" -> handlePostRequests(exchange);
             default -> sendResponse(exchange, 405, json("error", "Method Not Allowed"));
+        }
+    }
+
+    private void handlePostRequests(HttpExchange exchange) throws IOException {
+        URI uri = exchange.getRequestURI().normalize();
+        if (uri.getPath().endsWith("/customize")) {
+            handleUpdatePreferences(exchange);
+        } else {
+            sendResponse(exchange, 404, json("error", "Invalid API path"));
         }
     }
 
     private void handlePutRequests(HttpExchange exchange) throws IOException {
         URI uri = exchange.getRequestURI().normalize();
-
         if (uri.getPath().endsWith("/cancel-booking")) {
             handleCancelBooking(exchange);
         } else if (uri.getPath().endsWith("/update-booking-dates")) {
@@ -44,181 +62,166 @@ public class BookingHistoryHandler implements HttpHandler {
         }
     }
 
-    // -------------------- GET HISTORY (FIXED LOGIC) --------------------
+    // -------------------- SAVE & MERGE PREFERENCES logic --------------------
+    private void handleUpdatePreferences(HttpExchange exchange) throws IOException {
+        try {
+            Map<String, Object> data = objectMapper.readValue(exchange.getRequestBody(), Map.class);
+            String email = Objects.toString(data.get("email"), "").trim();
+
+            if (email.isEmpty()) {
+                sendResponse(exchange, 400, json("error", "Email is required"));
+                return;
+            }
+
+            String selectSql = "SELECT meal_preference, add_ons, travel_style, stay_preference, for_you, location_preference FROM user_info WHERE user_email = ?";
+            
+            try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
+                Map<String, String> currentPrefs = new HashMap<>();
+                
+                try (PreparedStatement selectStmt = conn.prepareStatement(selectSql)) {
+                    selectStmt.setString(1, email);
+                    try (ResultSet rs = selectStmt.executeQuery()) {
+                        if (rs.next()) {
+                            currentPrefs.put("meal_preference", rs.getString("meal_preference"));
+                            currentPrefs.put("add_ons", rs.getString("add_ons"));
+                            currentPrefs.put("travel_style", rs.getString("travel_style"));
+                            currentPrefs.put("stay_preference", rs.getString("stay_preference"));
+                            currentPrefs.put("for_you", rs.getString("for_you"));
+                            currentPrefs.put("location_preference", rs.getString("location_preference"));
+                        } else {
+                            sendResponse(exchange, 404, json("error", "User profile not found"));
+                            return;
+                        }
+                    }
+                }
+
+                String updateSql = """
+                    UPDATE user_info SET 
+                        stay_type = ?, meal_preference = ?, add_ons = ?, 
+                        travel_style = ?, stay_preference = ?, for_you = ?, 
+                        location_preference = ?, budget_min = ?, budget_max = ?
+                    WHERE user_email = ?
+                    """;
+
+                try (PreparedStatement stmt = conn.prepareStatement(updateSql)) {
+                    // Logic update: stay_type is overwritten (Hotel or Resort), others are merged
+                    stmt.setString(1, Objects.toString(data.get("stay_type"), "Hotel")); 
+                    stmt.setString(2, mergePreferences(currentPrefs.get("meal_preference"), data.get("meal_preference")));
+                    stmt.setString(3, mergePreferences(currentPrefs.get("add_ons"), data.get("add_ons")));
+                    stmt.setString(4, mergePreferences(currentPrefs.get("travel_style"), data.get("travel_style")));
+                    stmt.setString(5, mergePreferences(currentPrefs.get("stay_preference"), data.get("stay_preference")));
+                    stmt.setString(6, mergePreferences(currentPrefs.get("for_you"), data.get("for_you")));
+                    stmt.setString(7, mergePreferences(currentPrefs.get("location_preference"), data.get("location_preference")));
+                    
+                    // Critical Fix: Explicit Types.NUMERIC prevents 500 errors on nulls or string-numbers
+                    stmt.setObject(8, parseDouble(data.get("budget_min")), Types.NUMERIC);
+                    stmt.setObject(9, parseDouble(data.get("budget_max")), Types.NUMERIC);
+                    stmt.setString(10, email);
+
+                    stmt.executeUpdate();
+                    sendResponse(exchange, 200, json("success", "Preferences merged and saved"));
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            sendResponse(exchange, 500, json("error", "Database Error: " + e.getMessage()));
+        }
+    }
+
+    private String mergePreferences(String existing, Object incoming) {
+        String newItems = Objects.toString(incoming, "").trim();
+        if (newItems.isEmpty() || newItems.equalsIgnoreCase("null")) return existing;
+        if (existing == null || existing.isEmpty()) return newItems;
+
+        // Use LinkedHashSet to maintain order and remove duplicates
+        Set<String> mergedSet = new LinkedHashSet<>();
+        for (String s : existing.split(",")) {
+            if (!s.trim().isEmpty()) mergedSet.add(s.trim());
+        }
+        for (String s : newItems.split(",")) {
+            if (!s.trim().isEmpty()) mergedSet.add(s.trim());
+        }
+        return String.join(", ", mergedSet);
+    }
+
+    private Double parseDouble(Object val) {
+        if (val == null || val.toString().isEmpty() || val.toString().equalsIgnoreCase("null")) return null;
+        try {
+            return Double.parseDouble(val.toString());
+        } catch (Exception e) { return null; }
+    }
+
+    // -------------------- EXISTING METHODS (HISTORY / PUT) --------------------
+
     private void handleBookingHistory(HttpExchange exchange) throws IOException {
         Map<String, String> params = decodeParams(exchange.getRequestURI().getQuery());
-
         String email = params.getOrDefault("email", "").trim();
         String userId = params.getOrDefault("userId", "").trim();
 
-        boolean showUpcoming = params.getOrDefault("includeUpcoming", "false")
-                .trim().equalsIgnoreCase("true");
-
-        if (email.isEmpty() && userId.isEmpty()) {
-            sendResponse(exchange, 400, json("error", "Missing email or userId"));
-            return;
-        }
-
-        String sql = """
-                SELECT * FROM bookings_info
-                WHERE (email=? OR user_id=?)
-                ORDER BY check_in_date DESC
-                """;
-
+        String sql = "SELECT * FROM bookings_info WHERE (email=? OR user_id=?) ORDER BY payment_confirmed_at DESC";
         List<Map<String, Object>> results = new ArrayList<>();
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
-
             stmt.setString(1, email);
             stmt.setString(2, userId);
-
-            ResultSet rs = stmt.executeQuery();
-            LocalDate today = LocalDate.now();
-
-            while (rs.next()) {
-                LocalDate checkIn = rs.getDate("check_in_date") != null
-                        ? rs.getDate("check_in_date").toLocalDate() : null;
-
-                LocalDate checkOut = rs.getDate("check_out_date") != null
-                        ? rs.getDate("check_out_date").toLocalDate() : null;
-
-                String status = Optional.ofNullable(rs.getString("booking_status"))
-                        .orElse("").trim().toUpperCase();
-
-                boolean include = false;
-
-                if (showUpcoming) {
-                    /* UPCOMING / ONGOING: 
-                       Include if checkout is today or later AND status is not Cancelled.
-                       This ensures Checked-in and even today's Completed bookings stay visible.
-                    */
-                    if (checkOut != null && !status.equals("CANCELLED") &&
-                       (checkOut.isEqual(today) || checkOut.isAfter(today))) {
-                        include = true;
-                    }
-                } else {
-                    /* PAST: 
-                       Include if checkout date is strictly in the past
-                       OR the booking is explicitly Cancelled.
-                    */
-                    if (checkOut != null && checkOut.isBefore(today)) {
-                        include = true;
-                    } else if (status.equals("CANCELLED")) {
-                        include = true;
-                    }
-                }
-
-                if (include) {
-                    results.add(mapRow(rs));
-                }
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) { results.add(mapRow(rs)); }
             }
-
-            sendResponse(exchange, 200, objectMapper.writeValueAsString(results));
-
-        } catch (Exception e) {
-            sendResponse(exchange, 500, json("error", e.getMessage()));
-        }
+            sendResponse(exchange, 200, results);
+        } catch (Exception e) { sendResponse(exchange, 500, json("error", e.getMessage())); }
     }
 
-    // -------------------- DATE CHANGE --------------------
     private void handleUpdateBookingDates(HttpExchange exchange) throws IOException {
         Map<String, Object> data = objectMapper.readValue(exchange.getRequestBody(), Map.class);
-
         String bookingId = Objects.toString(data.get("booking_id"), "");
-        String newCheckIn = Objects.toString(data.get("check_in_date"), "");
-        String newCheckOut = Objects.toString(data.get("check_out_date"), "");
+        String newIn = Objects.toString(data.get("check_in_date"), "");
+        String newOut = Objects.toString(data.get("check_out_date"), "");
 
-        if (bookingId.isBlank() || newCheckIn.isBlank() || newCheckOut.isBlank()) {
-            sendResponse(exchange, 400, json("error", "Missing parameters"));
-            return;
-        }
-
-        String fetchSql = "SELECT room_price_per_day, gst FROM bookings_info WHERE booking_id=?";
-        // Explicit cast added for booking_status_enum
-        String updateSql = """
-                UPDATE bookings_info SET
-                check_in_date=?, 
-                check_out_date=?, 
-                total_days_at_stay=?, 
-                final_payable_amount=?,
-                booking_status='PENDING'::booking_status_enum
-                WHERE booking_id=?
-                """;
+        String fetch = "SELECT room_price_per_day, gst FROM bookings_info WHERE booking_id=?";
+        String update = "UPDATE bookings_info SET check_in_date=?, check_out_date=?, total_days_at_stay=?, final_payable_amount=? WHERE booking_id=?";
 
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
-             PreparedStatement fetch = conn.prepareStatement(fetchSql);
-             PreparedStatement update = conn.prepareStatement(updateSql)) {
-
-            fetch.setString(1, bookingId);
-            ResultSet rs = fetch.executeQuery();
-
-            if (!rs.next()) {
-                sendResponse(exchange, 404, json("error", "Booking not found"));
-                return;
+             PreparedStatement fStmt = conn.prepareStatement(fetch)) {
+            fStmt.setString(1, bookingId);
+            try (ResultSet rs = fStmt.executeQuery()) {
+                if (rs.next()) {
+                    long days = ChronoUnit.DAYS.between(LocalDate.parse(newIn), LocalDate.parse(newOut));
+                    double price = (rs.getDouble("room_price_per_day") * days) + rs.getDouble("gst");
+                    try (PreparedStatement uStmt = conn.prepareStatement(update)) {
+                        uStmt.setDate(1, java.sql.Date.valueOf(newIn));
+                        uStmt.setDate(2, java.sql.Date.valueOf(newOut));
+                        uStmt.setInt(3, (int) days);
+                        uStmt.setDouble(4, price);
+                        uStmt.setString(5, bookingId);
+                        uStmt.executeUpdate();
+                        sendResponse(exchange, 200, json("success", "Dates updated"));
+                    }
+                }
             }
-
-            LocalDate in = LocalDate.parse(newCheckIn);
-            LocalDate out = LocalDate.parse(newCheckOut);
-            long days = ChronoUnit.DAYS.between(in, out);
-
-            if (days <= 0) {
-                sendResponse(exchange, 400, json("error", "Invalid stay duration"));
-                return;
-            }
-
-            double price = rs.getDouble("room_price_per_day") * days + rs.getDouble("gst");
-
-            update.setDate(1, java.sql.Date.valueOf(in));
-            update.setDate(2, java.sql.Date.valueOf(out));
-            update.setInt(3, (int) days);
-            update.setDouble(4, price);
-            update.setString(5, bookingId);
-            update.executeUpdate();
-
-            sendResponse(exchange, 200, json("success", "Dates updated successfully"));
-
-        } catch (SQLException e) {
-            sendResponse(exchange, 500, json("error", e.getMessage()));
-        }
+        } catch (Exception e) { sendResponse(exchange, 500, json("error", e.getMessage())); }
     }
 
-    // -------------------- CANCEL BOOKING --------------------
     private void handleCancelBooking(HttpExchange exchange) throws IOException {
         Map<String, Object> body = objectMapper.readValue(exchange.getRequestBody(), Map.class);
-        String bookingId = Objects.toString(body.get("booking_id"), "");
-
-        if (bookingId.isBlank()) {
-            sendResponse(exchange, 400, json("error", "Missing Booking ID"));
-            return;
-        }
-
-        // Explicit cast added for booking_status_enum
-        String sql = "UPDATE bookings_info SET booking_status='CANCELLED'::booking_status_enum, refund_status='Refund Initiated' WHERE booking_id=?";
-
+        String bId = Objects.toString(body.get("booking_id"), "");
+        String sql = "UPDATE bookings_info SET booking_status='CANCELLED'::booking_status_enum WHERE booking_id=?";
         try (Connection conn = dbConfig.getCustomerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
-
-            stmt.setString(1, bookingId);
+            stmt.setString(1, bId);
             stmt.executeUpdate();
-
-            sendResponse(exchange, 200, json("success", "Booking cancelled"));
-
-        } catch (SQLException e) {
-            sendResponse(exchange, 500, json("error", e.getMessage()));
-        }
+            sendResponse(exchange, 200, json("success", "Cancelled"));
+        } catch (Exception e) { sendResponse(exchange, 500, json("error", e.getMessage())); }
     }
 
-    // -------------------- MAP DB -> JSON --------------------
     private Map<String, Object> mapRow(ResultSet rs) throws SQLException {
         Map<String, Object> row = new LinkedHashMap<>();
         ResultSetMetaData meta = rs.getMetaData();
-
         for (int i = 1; i <= meta.getColumnCount(); i++) {
-            Object value = rs.getObject(i);
-            if (value instanceof java.sql.Date date)
-                value = date.toLocalDate().toString();
-            row.put(meta.getColumnLabel(i), value);
+            Object val = rs.getObject(i);
+            if (val instanceof java.sql.Date d) val = d.toString();
+            else if (val instanceof java.sql.Timestamp t) val = t.toString();
+            row.put(meta.getColumnLabel(i), val);
         }
         return row;
     }
@@ -226,28 +229,21 @@ public class BookingHistoryHandler implements HttpHandler {
     private Map<String, String> decodeParams(String query) {
         Map<String, String> map = new HashMap<>();
         if (query == null) return map;
-
         for (String p : query.split("&")) {
             String[] pair = p.split("=", 2);
-            if (pair.length == 2) {
-                String key = URLDecoder.decode(pair[0], StandardCharsets.UTF_8);
-                String value = URLDecoder.decode(pair[1], StandardCharsets.UTF_8)
-                        .replaceAll("[\\s\\r\\n]+$", "").trim();
-                map.put(key, value);
-            }
+            if (pair.length == 2) map.put(URLDecoder.decode(pair[0], StandardCharsets.UTF_8), 
+                                         URLDecoder.decode(pair[1], StandardCharsets.UTF_8).trim());
         }
         return map;
     }
 
     private void sendResponse(HttpExchange ex, int code, Object body) throws IOException {
         String json = body instanceof String ? (String) body : objectMapper.writeValueAsString(body);
-        ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         ex.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
-        ex.sendResponseHeaders(code, json.getBytes(StandardCharsets.UTF_8).length);
-        try (OutputStream os = ex.getResponseBody()) { os.write(json.getBytes(StandardCharsets.UTF_8)); }
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        ex.sendResponseHeaders(code, bytes.length);
+        try (OutputStream os = ex.getResponseBody()) { os.write(bytes); }
     }
 
-    private Map<String, Object> json(String k, Object v) {
-        return Map.of(k, v);
-    }
+    private Map<String, Object> json(String k, Object v) { return Map.of(k, v); }
 }

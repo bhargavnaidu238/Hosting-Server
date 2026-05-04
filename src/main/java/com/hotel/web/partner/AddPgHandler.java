@@ -54,7 +54,7 @@ public class AddPgHandler implements HttpHandler {
             return;
         }
 
-        // ✅ IMAGE HANDLING
+        // ✅ IMAGE HANDLING & FOLDER STORAGE
         try {
             String pgId = params.getOrDefault("pg_id", "").trim();
             if (pgId.isEmpty()) {
@@ -78,21 +78,26 @@ public class AddPgHandler implements HttpHandler {
                         if (base64.contains(",")) base64 = base64.split(",")[1];
 
                         byte[] data = Base64.getDecoder().decode(base64);
-                        String fileName = pgId + "_" + safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
+                        
+                        // Define base file name
+                        String baseFileName = safeCategory + "_" + System.currentTimeMillis() + "_" + i + ".jpg";
 
                         if (isProduction) {
-                            savedUrls.add(HotelBookingServer.uploadToSupabase(data, fileName));
+                            // ✅ FIXED: Prepend pgId/ to the filename to create a folder in Supabase Storage
+                            String supabaseFilePath = pgId + "/" + baseFileName;
+                            savedUrls.add(HotelBookingServer.uploadToSupabase(data, supabaseFilePath));
                         } else {
+                            // Local storage logic
                             File dir = new File(dbConfig.getHotelImagesPath() + File.separator + pgId + File.separator + safeCategory);
                             if (!dir.exists()) dir.mkdirs();
-                            File f = new File(dir, fileName);
+                            File f = new File(dir, baseFileName);
                             Files.write(f.toPath(), data);
-                            savedUrls.add("http://localhost:8080/hotel_images/" + pgId + "/" + safeCategory + "/" + fileName);
+                            savedUrls.add("http://localhost:8080/hotel_images/" + pgId + "/" + safeCategory + "/" + baseFileName);
                         }
                     }
                 }
                 if (!savedUrls.isEmpty()) {
-                    params.put("hotel_images", String.join(",", savedUrls));
+                    params.put("hotel_images_csv", String.join(",", savedUrls));
                 }
             }
         } catch (Exception e) {
@@ -131,7 +136,7 @@ public class AddPgHandler implements HttpHandler {
     }
 
     private boolean addPGToDB(String pgId, Map<String, String> params) throws SQLException {
-        String sql = "INSERT INTO paying_guest_info (pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, total_four_sharing_rooms, total_five_sharing_rooms, hotel_location, available_rooms, room_price, amenities, policies, avg_rating, total_reviews, pg_contact, about_this_pg, pg_images, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::pg_status_enum)";
+        String sql = "INSERT INTO paying_guest_info (pg_id, partner_id, pg_name, pg_type, room_type, address, city, state, country, pincode, latitude, longitude, total_single_sharing_rooms, total_double_sharing_rooms, total_three_sharing_rooms, total_four_sharing_rooms, total_five_sharing_rooms, available_rooms, room_price, amenities, policies, avg_rating, total_reviews, pg_contact, about_this_pg, pg_images, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::pg_status_enum)";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setParams(stmt, pgId, params, false);
@@ -140,7 +145,7 @@ public class AddPgHandler implements HttpHandler {
     }
 
     private boolean updatePGInDB(String pgId, Map<String, String> params) throws SQLException {
-        String sql = "UPDATE paying_guest_info SET partner_id=?, pg_name=?, pg_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, total_single_sharing_rooms=?, total_double_sharing_rooms=?, total_three_sharing_rooms=?, total_four_sharing_rooms=?, total_five_sharing_rooms=?, hotel_location=?, available_rooms=?, room_price=?, amenities=?, policies=?, avg_rating=?, total_reviews=?, pg_contact=?, about_this_pg=?, pg_images=?, status=?::pg_status_enum WHERE pg_id=?";
+        String sql = "UPDATE paying_guest_info SET partner_id=?, pg_name=?, pg_type=?, room_type=?, address=?, city=?, state=?, country=?, pincode=?, latitude=?, longitude=?, total_single_sharing_rooms=?, total_double_sharing_rooms=?, total_three_sharing_rooms=?, total_four_sharing_rooms=?, total_five_sharing_rooms=?, available_rooms=?, room_price=?, amenities=?, policies=?, avg_rating=?, total_reviews=?, pg_contact=?, about_this_pg=?, pg_images=?, status=?::pg_status_enum WHERE pg_id=?";
         try (Connection conn = dbConfig.getPartnerDataSource().getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             setParams(stmt, pgId, params, true);
@@ -162,27 +167,26 @@ public class AddPgHandler implements HttpHandler {
         stmt.setString(i++, params.getOrDefault("country", ""));
         stmt.setString(i++, params.getOrDefault("pincode", ""));
 
+        stmt.setBigDecimal(i++, parseDecimalSafe(params.get("latitude")));
+        stmt.setBigDecimal(i++, parseDecimalSafe(params.get("longitude")));
+
         stmt.setInt(i++, parseIntSafe(params.get("total_single_sharing_rooms")));
         stmt.setInt(i++, parseIntSafe(params.get("total_double_sharing_rooms")));
         stmt.setInt(i++, parseIntSafe(params.get("total_three_sharing_rooms")));
         stmt.setInt(i++, parseIntSafe(params.get("total_four_sharing_rooms")));
         stmt.setInt(i++, parseIntSafe(params.get("total_five_sharing_rooms")));
 
-        stmt.setString(i++, params.getOrDefault("hotel_location", ""));
         stmt.setInt(i++, parseIntSafe(params.get("available_rooms")));
         stmt.setString(i++, params.getOrDefault("room_price", ""));
         stmt.setString(i++, params.getOrDefault("amenities", ""));
         stmt.setString(i++, params.getOrDefault("policies", ""));
 
-        // New Rating Logic
-        double avgRating = parseDoubleSafe(params.get("avg_rating"));
-        int totalReviews = parseIntSafe(params.get("total_reviews"));
-        stmt.setDouble(i++, avgRating);
-        stmt.setInt(i++, totalReviews);
+        stmt.setDouble(i++, parseDoubleSafe(params.get("avg_rating")));
+        stmt.setInt(i++, parseIntSafe(params.get("total_reviews")));
 
         stmt.setString(i++, params.getOrDefault("pg_contact", ""));
         stmt.setString(i++, params.getOrDefault("about_this_pg", ""));
-        stmt.setString(i++, params.getOrDefault("hotel_images", ""));
+        stmt.setString(i++, params.getOrDefault("hotel_images_csv", ""));
 
         String status = params.getOrDefault("status", "Active");
         stmt.setString(i++, status);
@@ -196,6 +200,10 @@ public class AddPgHandler implements HttpHandler {
 
     private double parseDoubleSafe(String s) {
         try { return (s == null || s.trim().isEmpty()) ? 0.0 : Double.parseDouble(s.trim()); } catch (Exception e) { return 0.0; }
+    }
+    
+    private java.math.BigDecimal parseDecimalSafe(String s) {
+        try { return (s == null || s.trim().isEmpty()) ? java.math.BigDecimal.ZERO : new java.math.BigDecimal(s.trim()); } catch (Exception e) { return java.math.BigDecimal.ZERO; }
     }
 
     private String readRequestBody(HttpExchange exchange) throws IOException {

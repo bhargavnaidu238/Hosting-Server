@@ -43,6 +43,9 @@ public class RegisterHandler implements HttpHandler {
             String address = json.optString("address", null);
             String rawPassword = json.getString("password");
             String consent = json.optString("consent", "No");
+            
+            // New: Optional Referral Code provided by the new user
+            String referredByCode = json.optString("referred_by", "").trim().toUpperCase();
 
             if (!consent.equalsIgnoreCase("Yes") && !consent.equalsIgnoreCase("No")) {
                 sendResponse(exchange, 400, "Consent must be Yes or No");
@@ -51,12 +54,12 @@ public class RegisterHandler implements HttpHandler {
 
             String hashedPassword = PasswordUtil.hashPassword(rawPassword);
             String finalUserId;
+            String newUserReferralCode;
 
-            // 1. PRIMARY TRANSACTION (Customer Data)
             try (Connection conn = dbConfig.getCustomerDataSource().getConnection()) {
                 conn.setAutoCommit(false);
 
-                // Check email exists
+                // 1. Check if email exists
                 try (PreparedStatement ps = conn.prepareStatement("SELECT 1 FROM user_info WHERE LOWER(user_email) = ?")) {
                     ps.setString(1, email);
                     if (ps.executeQuery().next()) {
@@ -65,7 +68,23 @@ public class RegisterHandler implements HttpHandler {
                     }
                 }
 
-                // Generate user_id
+                // 2. Validate provided Referral Code (if any)
+                String referrerUserId = null;
+                if (!referredByCode.isEmpty()) {
+                    String checkRefSql = "SELECT user_id FROM user_info WHERE referral_code = ?";
+                    try (PreparedStatement ps = conn.prepareStatement(checkRefSql)) {
+                        ps.setString(1, referredByCode);
+                        ResultSet rs = ps.executeQuery();
+                        if (rs.next()) {
+                            referrerUserId = rs.getString("user_id");
+                        } else {
+                            sendResponse(exchange, 400, "Invalid Referral Code");
+                            return;
+                        }
+                    }
+                }
+
+                // 3. Generate user_id (CR prefix logic)
                 String newUserId = "CR9087601";
                 String idSql = "SELECT user_id FROM user_info ORDER BY user_id DESC LIMIT 1";
                 try (Statement stmt = conn.createStatement();
@@ -78,12 +97,18 @@ public class RegisterHandler implements HttpHandler {
                 }
                 finalUserId = newUserId;
 
-                // Insert user
+                // 4. Generate Unique Referral Code for the new user
+                // Format: First 3 of Name + Last 4 of ID (e.g., GAU7601)
+                String namePart = firstName.length() >= 3 ? firstName.substring(0, 3).toUpperCase() : (firstName + "X").substring(0, 3).toUpperCase();
+                String idPart = finalUserId.substring(finalUserId.length() - 4);
+                newUserReferralCode = "HB-" + namePart + idPart;
+
+                // 5. Insert user into user_info
                 String insertSql = """
                     INSERT INTO user_info 
                     (user_id, user_email, password, first_name, last_name, 
-                     gender, mobile_number, address, consent) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::yes_no_enum)
+                     gender, mobile_number, address, consent, referral_code, signup_referral_code) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::yes_no_enum, ?, ?)
                 """;
 
                 try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
@@ -96,25 +121,36 @@ public class RegisterHandler implements HttpHandler {
                     ps.setString(7, mobile);
                     ps.setString(8, address);
                     ps.setString(9, consent);
+                    ps.setString(10, newUserReferralCode);
+                    ps.setString(11, referredByCode.isEmpty() ? null : referredByCode);
                     ps.executeUpdate();
                 }
 
-                // Create wallet
+                // 6. Create wallet with Joining Bonus
                 String walletSql = "INSERT INTO wallets (wallet_id, user_id, balance, status) VALUES (?, ?, ?, ?)";
                 try (PreparedStatement ps = conn.prepareStatement(walletSql)) {
                     ps.setString(1, UUID.randomUUID().toString());
                     ps.setString(2, finalUserId);
-                    ps.setBigDecimal(3, new java.math.BigDecimal("200.00"));
+                    ps.setBigDecimal(3, new java.math.BigDecimal("200.00")); // Welcome Bonus
                     ps.setString(4, "Active");
                     ps.executeUpdate();
+                }
+
+                // 7. If referred by someone, link them in the referrals table
+                if (referrerUserId != null) {
+                    String refLinkSql = "INSERT INTO referrals (referrer_id, referee_id, referral_code) VALUES (?, ?, ?)";
+                    try (PreparedStatement ps = conn.prepareStatement(refLinkSql)) {
+                        ps.setString(1, referrerUserId);
+                        ps.setString(2, finalUserId);
+                        ps.setString(3, referredByCode);
+                        ps.executeUpdate();
+                    }
                 }
 
                 conn.commit();
             }
 
-            /* ===============================
-             * 2. CLEANUP OTP Record (Separate Connection)
-             * =============================== */
+            // OTP Cleanup Logic
             try (Connection otpConn = dbConfig.getPartnerDataSource().getConnection()) {
                 String deleteOtp = "DELETE FROM email_verification_otp WHERE LOWER(email) = ?";
                 try (PreparedStatement deleteStmt = otpConn.prepareStatement(deleteOtp)) {
@@ -122,22 +158,22 @@ public class RegisterHandler implements HttpHandler {
                     deleteStmt.executeUpdate();
                 }
             } catch (SQLException e) {
-                // We don't block registration if OTP deletion fails
                 System.err.println("OTP Cleanup Warning: " + e.getMessage());
             }
 
-            /* ===============================
-             * 3. ASYNC WELCOME EMAIL
-             * =============================== */
+            // Async Welcome Email
             String fullName = (firstName + " " + lastName).trim();
+            final String referralCodeForEmail = newUserReferralCode;
             new Thread(() -> {
                 try {
-                	EmailService emailService = new EmailService(dbConfig);
+                    EmailService emailService = new EmailService(dbConfig);
                     String subject = "Welcome to Hotel Booking";
                     String welcomeBody = "Hello " + fullName + ",\n\n" +
-                                        "Your registration is successful.\n" +
-                                        "Your User ID: " + finalUserId + "\n\n" +
-                                        "Regards,\nTeam Hotel Booking";
+                                         "Your registration is successful.\n" +
+                                         "Your User ID: " + finalUserId + "\n" +
+                                         "Your Personal Referral Code: " + referralCodeForEmail + "\n\n" +
+                                         "Share your code with friends to earn rewards!\n\n" +
+                                         "Regards,\nTeam Hotel Booking";
                     emailService.sendEmail(email, subject, welcomeBody);
                 } catch (Exception e) {
                     System.err.println("Async Welcome Email Failed: " + e.getMessage());
