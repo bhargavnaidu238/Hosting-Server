@@ -291,7 +291,7 @@ public class WebLoginRegisterHandler implements HttpHandler {
                     insertStmt.setString(11, pincode);
                     insertStmt.setString(12, gstNumber);
                     insertStmt.setTimestamp(13, registrationDate);
-                    insertStmt.setString(14, "Active");
+                    insertStmt.setString(14, "Inactive");
                     insertStmt.executeUpdate();
                 }
 
