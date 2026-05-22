@@ -1,18 +1,16 @@
 package com.hotel.notification.service;
 
 import com.hotel.utilities.DbConfig;
-
-// ✅ Jakarta Mail imports
-import jakarta.mail.*;
-import jakarta.mail.internet.InternetAddress;
-import jakarta.mail.internet.MimeMessage;
-
 import java.io.IOException;
-import java.util.Properties;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 
 public class EmailService {
 
     private final DbConfig dbConfig;
+    private final HttpClient httpClient = HttpClient.newHttpClient();
 
     public EmailService(DbConfig dbConfig) {
         if (dbConfig == null) {
@@ -21,56 +19,48 @@ public class EmailService {
         this.dbConfig = dbConfig;
     }
 
-    //============== Sends email using Zoho SMTP (SSL Port 465) ======================
+    //============== Sends email using Zoho Mail REST API (Port 443 - Render Free Safe) ======================
     public void sendEmail(String recipientEmail, String subject, String body) throws IOException {
 
         try {
-            Properties props = new Properties();
-            
-            // Hardcoding the host/port ensures it bypasses incorrect configurations, 
-            // or you can keep using dbConfig if your Render environment variables are exactly "smtp.zoho.in" and "465"
-            props.put("mail.smtp.host", "smtp.zoho.in"); 
-            props.put("mail.smtp.port", "465");
-            props.put("mail.smtp.auth", "true");
-            
-            // ✅ CRITICAL CHANGES FOR ZOHO INDIA SSL REQUIREMENT
-            props.put("mail.smtp.ssl.enable", "true");
-            props.put("mail.smtp.socketFactory.port", "465");
-            props.put("mail.smtp.socketFactory.class", "javax.net.ssl.SSLSocketFactory");
-            props.put("mail.smtp.socketFactory.fallback", "false");
+            String fromEmail = dbConfig.getSmtpUsername(); // Your complete zoho.in email ID
 
-            Session session = Session.getInstance(props, new Authenticator() {
-                @Override
-                protected PasswordAuthentication getPasswordAuthentication() {
-                    return new PasswordAuthentication(
-                            dbConfig.getSmtpUsername(), // Must be your complete zoho.in email ID
-                            dbConfig.getSmtpPassword()  // Must be your generated 16-character App Password
-                    );
-                }
-            });
+            // Clean and escape JSON characters from the text body dynamically
+            String cleanBody = body.replace("\n", "\\n").replace("\"", "\\\"");
 
-            Message message = new MimeMessage(session);
+            // Construct Zoho Mail JSON API format
+            String jsonPayload = "{"
+                    + "\"fromAddress\":\"" + fromEmail + "\","
+                    + "\"toAddress\":\"" + recipientEmail + "\","
+                    + "\"subject\":\"" + subject + "\","
+                    + "\"content\":\"" + cleanBody + "\""
+                    + "}";
 
-            // Safe fallback logic for Sender data
-            String senderEmail = dbConfig.getSenderEmail() != null ? dbConfig.getSenderEmail() : dbConfig.getSmtpUsername();
-            
-            if (dbConfig.getSenderName() != null && !dbConfig.getSenderName().isEmpty()) {
-                message.setFrom(new InternetAddress(senderEmail, dbConfig.getSenderName()));
-            } else {
-                message.setFrom(new InternetAddress(senderEmail));
+            // Targeting Zoho India's core web gateway interface
+            String apiUrl = "https://mail.zoho.in/api/v1/accounts/" + fromEmail + "/messages";
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(apiUrl))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    // Uses your application credentials securely via web protocols
+                    .header("Authorization", "Zoho-oauthtoken " + dbConfig.getSmtpPassword())
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            // Validate response logs
+            if (response.statusCode() != 200 && response.statusCode() != 201) {
+                System.err.println("[EmailService] Zoho REST execution error. Response: " + response.body());
+                throw new IOException("Zoho API returned bad status: " + response.statusCode());
             }
 
-            message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(recipientEmail));
-            message.setSubject(subject);
-            message.setText(body);
-
-            Transport.send(message);
-
-            System.out.println("[EmailService] Success: Email sent to " + recipientEmail);
+            System.out.println("[EmailService] Success: HTTP API Email sent to " + recipientEmail);
 
         } catch (Exception ex) {
             System.err.println("[EmailService] Error sending email: " + ex.getMessage());
-            throw new IOException("SMTP Email failed: " + ex.getMessage(), ex);
+            throw new IOException("HTTP API Email failed: " + ex.getMessage(), ex);
         }
     }
 }

@@ -4,21 +4,22 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hotel.utilities.DbConfig;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
-import jakarta.mail.*;
-import jakarta.mail.internet.InternetAddress;
-import jakarta.mail.internet.MimeMessage;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.sql.*;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Random;
 
 public class EmailHandler implements HttpHandler {
 
     private final DbConfig dbConfig;
     private final ObjectMapper mapper = new ObjectMapper();
+    private final HttpClient httpClient = HttpClient.newHttpClient();
 
     public EmailHandler(DbConfig dbConfig) {
         this.dbConfig = dbConfig;
@@ -149,39 +150,43 @@ public class EmailHandler implements HttpHandler {
         sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP sent to email\"}");
     }
 
-    // ✅ FIXED SMTP METHOD TARGETING ZOHO MAIL INDIA (.IN) OVER SSL
+    // ✅ REWRITTEN HTTP REST API DELIVERY METHOD (Render Free Tier Safe)
     private void sendEmail(String to, String subject, String bodyText) throws Exception {
+        
+        String fromEmail = dbConfig.getSmtpUsername(); // Your complete zoho.in email ID
+        
+        // Clean and escape JSON characters from the text body dynamically
+        String cleanBody = bodyText.replace("\n", "\\n").replace("\"", "\\\"");
 
-        Properties props = new Properties();
-        props.put("mail.smtp.host", "smtp.zoho.in"); 
-        props.put("mail.smtp.port", "465");
-        props.put("mail.smtp.auth", "true");
-        props.put("mail.smtp.ssl.enable", "true");
-        props.put("mail.smtp.socketFactory.port", "465");
-        props.put("mail.smtp.socketFactory.class", "javax.net.ssl.SSLSocketFactory");
-        props.put("mail.smtp.socketFactory.fallback", "false");
+        // Construct Zoho Mail JSON API format
+        String jsonPayload = "{"
+                + "\"fromAddress\":\"" + fromEmail + "\","
+                + "\"toAddress\":\"" + to + "\","
+                + "\"subject\":\"" + subject + "\","
+                + "\"content\":\"" + cleanBody + "\""
+                + "}";
 
-        Session session = Session.getInstance(props, new Authenticator() {
-            @Override
-            protected PasswordAuthentication getPasswordAuthentication() {
-                return new PasswordAuthentication(
-                        dbConfig.getSmtpUsername(), // Your complete zoho.in email ID
-                        dbConfig.getSmtpPassword()  // Put your generated 16-character App Password here
-                );
-            }
-        });
+        // Targeting Zoho India's core web gateway interface
+        String apiUrl = "https://mail.zoho.in/api/v1/accounts/" + fromEmail + "/messages";
 
-        Message message = new MimeMessage(session);
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(apiUrl))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                // Uses your application credentials securely via web protocols
+                .header("Authorization", "Zoho-oauthtoken " + dbConfig.getSmtpPassword())
+                .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                .build();
 
-        String senderEmail = dbConfig.getSenderEmail() != null ? dbConfig.getSenderEmail() : dbConfig.getSmtpUsername();
-        String senderName = dbConfig.getSenderName() != null ? dbConfig.getSenderName() : "Hotel Booking Team";
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-        message.setFrom(new InternetAddress(senderEmail, senderName));
-        message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(to));
-        message.setSubject(subject);
-        message.setText(bodyText);
-
-        Transport.send(message);
+        // Validate response logs
+        if (response.statusCode() != 200 && response.statusCode() != 201) {
+            System.err.println("[EmailHandler] Zoho REST execution error. Response: " + response.body());
+            throw new IOException("Zoho API returned bad status: " + response.statusCode());
+        }
+        
+        System.out.println("[EmailHandler] HTTP API Email Sent Successfully!");
     }
 
     private void handleVerifyOtp(HttpExchange exchange, String email, String userOtp) throws Exception {
