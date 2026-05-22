@@ -149,34 +149,35 @@ public class EmailHandler implements HttpHandler {
         sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP sent to email\"}");
     }
 
-    // ✅ FIXED SMTP METHOD
+    // ✅ FIXED SMTP METHOD TARGETING ZOHO MAIL INDIA (.IN) OVER SSL
     private void sendEmail(String to, String subject, String bodyText) throws Exception {
 
         Properties props = new Properties();
-        props.put("mail.smtp.host", dbConfig.getSmtpHost());
-        props.put("mail.smtp.port", dbConfig.getSmtpPort());
+        props.put("mail.smtp.host", "smtp.zoho.in"); 
+        props.put("mail.smtp.port", "465");
         props.put("mail.smtp.auth", "true");
-        props.put("mail.smtp.starttls.enable", "true");
+        props.put("mail.smtp.ssl.enable", "true");
+        props.put("mail.smtp.socketFactory.port", "465");
+        props.put("mail.smtp.socketFactory.class", "javax.net.ssl.SSLSocketFactory");
+        props.put("mail.smtp.socketFactory.fallback", "false");
 
         Session session = Session.getInstance(props, new Authenticator() {
+            @Override
             protected PasswordAuthentication getPasswordAuthentication() {
                 return new PasswordAuthentication(
-                        dbConfig.getSmtpUsername(),
-                        dbConfig.getSmtpPassword()
+                        dbConfig.getSmtpUsername(), // Your complete zoho.in email ID
+                        dbConfig.getSmtpPassword()  // Put your generated 16-character App Password here
                 );
             }
         });
 
         Message message = new MimeMessage(session);
 
-        message.setFrom(new InternetAddress(
-                dbConfig.getSenderEmail(),
-                dbConfig.getSenderName() != null ? dbConfig.getSenderName() : ""
-        ));
+        String senderEmail = dbConfig.getSenderEmail() != null ? dbConfig.getSenderEmail() : dbConfig.getSmtpUsername();
+        String senderName = dbConfig.getSenderName() != null ? dbConfig.getSenderName() : "Hotel Booking Team";
 
-        message.setRecipients(Message.RecipientType.TO,
-                InternetAddress.parse(to));
-
+        message.setFrom(new InternetAddress(senderEmail, senderName));
+        message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(to));
         message.setSubject(subject);
         message.setText(bodyText);
 

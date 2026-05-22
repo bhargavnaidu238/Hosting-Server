@@ -2,7 +2,7 @@ package com.hotel.notification.service;
 
 import com.hotel.utilities.DbConfig;
 
-// ✅ Jakarta Mail imports (make sure dependency is added)
+// ✅ Jakarta Mail imports
 import jakarta.mail.*;
 import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeMessage;
@@ -21,42 +21,47 @@ public class EmailService {
         this.dbConfig = dbConfig;
     }
 
-    
-    //============== Sends email using Zoho SMTP ======================
+    //============== Sends email using Zoho SMTP (SSL Port 465) ======================
     public void sendEmail(String recipientEmail, String subject, String body) throws IOException {
 
         try {
             Properties props = new Properties();
-            props.put("mail.smtp.host", dbConfig.getSmtpHost());
-            props.put("mail.smtp.port", dbConfig.getSmtpPort());
+            
+            // Hardcoding the host/port ensures it bypasses incorrect configurations, 
+            // or you can keep using dbConfig if your Render environment variables are exactly "smtp.zoho.in" and "465"
+            props.put("mail.smtp.host", "smtp.zoho.in"); 
+            props.put("mail.smtp.port", "465");
             props.put("mail.smtp.auth", "true");
-            props.put("mail.smtp.starttls.enable", "true");
+            
+            // ✅ CRITICAL CHANGES FOR ZOHO INDIA SSL REQUIREMENT
+            props.put("mail.smtp.ssl.enable", "true");
+            props.put("mail.smtp.socketFactory.port", "465");
+            props.put("mail.smtp.socketFactory.class", "javax.net.ssl.SSLSocketFactory");
+            props.put("mail.smtp.socketFactory.fallback", "false");
 
             Session session = Session.getInstance(props, new Authenticator() {
+                @Override
                 protected PasswordAuthentication getPasswordAuthentication() {
                     return new PasswordAuthentication(
-                            dbConfig.getSmtpUsername(),
-                            dbConfig.getSmtpPassword()
+                            dbConfig.getSmtpUsername(), // Must be your complete zoho.in email ID
+                            dbConfig.getSmtpPassword()  // Must be your generated 16-character App Password
                     );
                 }
             });
 
             Message message = new MimeMessage(session);
 
+            // Safe fallback logic for Sender data
+            String senderEmail = dbConfig.getSenderEmail() != null ? dbConfig.getSenderEmail() : dbConfig.getSmtpUsername();
+            
             if (dbConfig.getSenderName() != null && !dbConfig.getSenderName().isEmpty()) {
-                message.setFrom(new InternetAddress(
-                        dbConfig.getSenderEmail(),
-                        dbConfig.getSenderName()
-                ));
+                message.setFrom(new InternetAddress(senderEmail, dbConfig.getSenderName()));
             } else {
-                message.setFrom(new InternetAddress(dbConfig.getSenderEmail()));
+                message.setFrom(new InternetAddress(senderEmail));
             }
 
-            message.setRecipients(Message.RecipientType.TO,
-                    InternetAddress.parse(recipientEmail));
-
+            message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(recipientEmail));
             message.setSubject(subject);
-
             message.setText(body);
 
             Transport.send(message);
