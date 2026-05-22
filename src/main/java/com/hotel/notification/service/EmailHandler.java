@@ -150,7 +150,7 @@ public class EmailHandler implements HttpHandler {
         sendResponse(exchange, 200, "{\"status\":\"success\",\"message\":\"OTP sent to email\"}");
     }
 
-    // ✅ REWRITTEN HTTP REST API DELIVERY METHOD (Render Free Tier Safe)
+    // ✅ FIXED HTTP REST API DELIVERY METHOD (Bypasses Render Port Restrictions)
     private void sendEmail(String to, String subject, String bodyText) throws Exception {
         
         String fromEmail = dbConfig.getSmtpUsername(); // Your complete zoho.in email ID
@@ -163,11 +163,12 @@ public class EmailHandler implements HttpHandler {
                 + "\"fromAddress\":\"" + fromEmail + "\","
                 + "\"toAddress\":\"" + to + "\","
                 + "\"subject\":\"" + subject + "\","
-                + "\"content\":\"" + cleanBody + "\""
+                + "\"content\":\"" + cleanBody + "\","
+                + "\"mailFormat\":\"plaintext\""
                 + "}";
 
-        // Targeting Zoho India's core web gateway interface
-        String apiUrl = "https://mail.zoho.in/api/v1/accounts/" + fromEmail + "/messages";
+        // ✅ FIXED ROUTE: Using the universal messages endpoint to avoid account ID lookups
+        String apiUrl = "https://mail.zoho.in/api/accounts/messages";
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(apiUrl))

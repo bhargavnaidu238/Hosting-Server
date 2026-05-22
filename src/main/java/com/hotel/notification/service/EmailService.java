@@ -28,16 +28,17 @@ public class EmailService {
             // Clean and escape JSON characters from the text body dynamically
             String cleanBody = body.replace("\n", "\\n").replace("\"", "\\\"");
 
-            // Construct Zoho Mail JSON API format
+            // Construct Zoho Mail JSON API format with explicit plain text designation
             String jsonPayload = "{"
                     + "\"fromAddress\":\"" + fromEmail + "\","
                     + "\"toAddress\":\"" + recipientEmail + "\","
                     + "\"subject\":\"" + subject + "\","
-                    + "\"content\":\"" + cleanBody + "\""
+                    + "\"content\":\"" + cleanBody + "\","
+                    + "\"mailFormat\":\"plaintext\""
                     + "}";
 
-            // Targeting Zoho India's core web gateway interface
-            String apiUrl = "https://mail.zoho.in/api/v1/accounts/" + fromEmail + "/messages";
+            // ✅ FIXED ROUTE: Using the universal endpoint layout to bypass the 404 Account ID routing error
+            String apiUrl = "https://mail.zoho.in/api/accounts/messages";
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(apiUrl))
